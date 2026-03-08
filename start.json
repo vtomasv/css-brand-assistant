@@ -4,6 +4,19 @@
     {
       "method": "log",
       "params": {
+        "html": "<p>🔄 Verificando dependencias...</p>"
+      }
+    },
+    {
+      "method": "shell.run",
+      "params": {
+        "message": "venv/bin/python -c \"import fastapi\" 2>/dev/null || (echo 'Instalando dependencias...' && venv/bin/pip install -r requirements.txt --quiet)",
+        "path": "{{cwd}}"
+      }
+    },
+    {
+      "method": "log",
+      "params": {
         "html": "<p>🔄 Iniciando Ollama...</p>"
       }
     },
@@ -16,13 +29,13 @@
     {
       "method": "log",
       "params": {
-        "html": "<p>🚀 Iniciando CSS Brand Assistant en puerto {{port}}...</p>"
+        "html": "<p>🚀 Iniciando servidor en puerto {{port}}...</p>"
       }
     },
     {
       "method": "shell.run",
       "params": {
-        "message": "{{platform === 'win32' ? 'venv\\\\Scripts\\\\python' : 'venv/bin/python'}} server/app.py",
+        "message": "venv/bin/python server/app.py",
         "path": "{{cwd}}",
         "env": {
           "PORT": "{{port}}",

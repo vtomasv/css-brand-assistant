@@ -51,33 +51,13 @@
     {
       "method": "log",
       "params": {
-        "html": "<p>🐍 Creando entorno Python virtual...</p>"
+        "html": "<p>🐍 Creando entorno Python e instalando dependencias...</p>"
       }
     },
     {
       "method": "shell.run",
       "params": {
-        "message": "python3 -m venv venv || python -m venv venv",
-        "path": "{{cwd}}"
-      }
-    },
-    {
-      "method": "log",
-      "params": {
-        "html": "<p>📦 Instalando dependencias Python...</p>"
-      }
-    },
-    {
-      "method": "shell.run",
-      "params": {
-        "message": "{{platform === 'win32' ? 'venv\\\\Scripts\\\\pip' : 'venv/bin/pip'}} install --upgrade pip",
-        "path": "{{cwd}}"
-      }
-    },
-    {
-      "method": "shell.run",
-      "params": {
-        "message": "{{platform === 'win32' ? 'venv\\\\Scripts\\\\pip' : 'venv/bin/pip'}} install -r requirements.txt",
+        "message": "python3 -m venv venv && venv/bin/pip install --upgrade pip --quiet && venv/bin/pip install -r requirements.txt --quiet && echo DEPS_OK",
         "path": "{{cwd}}"
       }
     },
