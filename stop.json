@@ -3,7 +3,7 @@
     {
       "method": "shell.run",
       "params": {
-        "message": "kill $(lsof -t -i:{{port}}) 2>/dev/null || true"
+        "message": "{{platform === 'win32' ? 'taskkill /F /IM python.exe 2>nul || true' : 'pkill -f \"server/app.py\" 2>/dev/null || true'}}"
       }
     }
   ]

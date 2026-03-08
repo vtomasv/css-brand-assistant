@@ -1,10 +1,10 @@
 /**
  * CSS Brand Assistant — Configuración de Plugin Pinokio
  *
- * Este archivo define el menú dinámico del plugin según su estado:
- *   - No instalado: muestra botón de instalación
- *   - Instalado y corriendo: muestra estado activo y botón de detener
- *   - Instalado y detenido: muestra botón de iniciar
+ * Menú dinámico según estado del plugin:
+ *   - No instalado: botón de instalación
+ *   - Instalado y corriendo: estado activo + botón detener + abrir UI
+ *   - Instalado y detenido: botón iniciar
  */
 module.exports = {
   title: "CSS Brand Assistant",
@@ -38,14 +38,14 @@ module.exports = {
           style: "color: #22c55e",
         },
         {
-          icon: "fa-solid fa-stop",
-          text: "Detener",
-          href: "stop.json",
-        },
-        {
           icon: "fa-solid fa-arrow-up-right-from-square",
           text: "Abrir UI",
           href: "{{port}}",
+        },
+        {
+          icon: "fa-solid fa-stop",
+          text: "Detener",
+          href: "stop.json",
         },
       ]
     }

@@ -1,29 +1,27 @@
 {
   "run": [
     {
-      "method": "notify",
+      "method": "log",
       "params": {
-        "html": "Instalando CSS Brand Assistant...",
-        "type": "info"
+        "html": "<h3>🚀 Instalando CSS Brand Assistant...</h3>"
+      }
+    },
+    {
+      "method": "log",
+      "params": {
+        "html": "<p>Verificando Ollama...</p>"
       }
     },
     {
       "method": "shell.run",
       "params": {
-        "message": "{{platform === 'win32' ? 'where ollama' : 'which ollama'}}",
-        "on": [
-          {
-            "event": "/not found|no ollama/i",
-            "done": true
-          }
-        ]
+        "message": "ollama --version"
       }
     },
     {
-      "method": "notify",
+      "method": "log",
       "params": {
-        "html": "Iniciando Ollama...",
-        "type": "info"
+        "html": "<p>Iniciando servicio Ollama...</p>"
       }
     },
     {
@@ -35,14 +33,13 @@
     {
       "method": "shell.run",
       "params": {
-        "message": "sleep 4"
+        "message": "sleep 3 && curl -s http://localhost:11434/api/tags > /dev/null || true"
       }
     },
     {
-      "method": "notify",
+      "method": "log",
       "params": {
-        "html": "Descargando modelo de IA (puede tardar varios minutos según tu conexión)...",
-        "type": "info"
+        "html": "<p>⬇️ Descargando modelo de IA (puede tardar varios minutos)...</p>"
       }
     },
     {
@@ -52,32 +49,42 @@
       }
     },
     {
-      "method": "notify",
+      "method": "log",
       "params": {
-        "html": "Creando entorno Python...",
-        "type": "info"
+        "html": "<p>🐍 Creando entorno Python virtual...</p>"
       }
     },
     {
       "method": "shell.run",
       "params": {
-        "message": "python -m venv venv",
+        "message": "python3 -m venv venv || python -m venv venv",
         "path": "{{cwd}}"
       }
     },
     {
-      "method": "notify",
+      "method": "log",
       "params": {
-        "html": "Instalando dependencias Python...",
-        "type": "info"
+        "html": "<p>📦 Instalando dependencias Python...</p>"
       }
     },
     {
       "method": "shell.run",
       "params": {
-        "message": "pip install -r requirements.txt",
-        "path": "{{cwd}}",
-        "venv": "venv"
+        "message": "{{platform === 'win32' ? 'venv\\\\Scripts\\\\pip' : 'venv/bin/pip'}} install --upgrade pip",
+        "path": "{{cwd}}"
+      }
+    },
+    {
+      "method": "shell.run",
+      "params": {
+        "message": "{{platform === 'win32' ? 'venv\\\\Scripts\\\\pip' : 'venv/bin/pip'}} install -r requirements.txt",
+        "path": "{{cwd}}"
+      }
+    },
+    {
+      "method": "log",
+      "params": {
+        "html": "<p>💾 Inicializando directorios de datos...</p>"
       }
     },
     {
@@ -102,10 +109,22 @@
       }
     },
     {
+      "method": "fs.write",
+      "params": {
+        "path": "data/config.json",
+        "text": "{{JSON.stringify({version: '0.1.0', installedAt: new Date().toISOString(), defaultModel: ram < 6 ? 'llama3.2:1b' : ram < 12 ? 'llama3.2:3b' : 'llama3.1:8b'}, null, 2)}}"
+      }
+    },
+    {
+      "method": "log",
+      "params": {
+        "html": "<h3 style='color: #22c55e'>✅ Instalación completada</h3><p>Haz click en <strong>Iniciar</strong> para comenzar a usar CSS Brand Assistant.</p>"
+      }
+    },
+    {
       "method": "notify",
       "params": {
-        "html": "CSS Brand Assistant instalado correctamente. ¡Listo para usar!",
-        "type": "success"
+        "html": "CSS Brand Assistant instalado correctamente."
       }
     }
   ]

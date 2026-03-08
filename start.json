@@ -2,11 +2,28 @@
   "daemon": true,
   "run": [
     {
+      "method": "log",
+      "params": {
+        "html": "<p>🔄 Iniciando Ollama...</p>"
+      }
+    },
+    {
       "method": "shell.run",
       "params": {
-        "message": "ollama serve > /dev/null 2>&1 & sleep 2 && python server/app.py",
+        "message": "ollama serve > /dev/null 2>&1 & sleep 2 && curl -s http://localhost:11434/api/tags > /dev/null || true"
+      }
+    },
+    {
+      "method": "log",
+      "params": {
+        "html": "<p>🚀 Iniciando CSS Brand Assistant en puerto {{port}}...</p>"
+      }
+    },
+    {
+      "method": "shell.run",
+      "params": {
+        "message": "{{platform === 'win32' ? 'venv\\\\Scripts\\\\python' : 'venv/bin/python'}} server/app.py",
         "path": "{{cwd}}",
-        "venv": "venv",
         "env": {
           "PORT": "{{port}}",
           "DATA_DIR": "{{cwd}}/data",
