@@ -1,0 +1,42 @@
+# Entorno virtual Python
+venv/
+env/
+.venv/
+
+# Datos del usuario (no versionar)
+data/brands/
+data/campaigns/
+data/sessions/
+data/exports/
+data/audit/
+data/config.json
+
+# Conservar estructura de directorios
+!data/.gitkeep
+!data/agents/.gitkeep
+!data/prompts/.gitkeep
+!data/prompts/system/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Logs
+*.log
+*.jsonl
+
+# OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Temporales
+*.tmp
+*.bak

@@ -1,0 +1,112 @@
+{
+  "run": [
+    {
+      "method": "notify",
+      "params": {
+        "html": "Instalando CSS Brand Assistant...",
+        "type": "info"
+      }
+    },
+    {
+      "method": "shell.run",
+      "params": {
+        "message": "{{platform === 'win32' ? 'where ollama' : 'which ollama'}}",
+        "on": [
+          {
+            "event": "/not found|no ollama/i",
+            "done": true
+          }
+        ]
+      }
+    },
+    {
+      "method": "notify",
+      "params": {
+        "html": "Iniciando Ollama...",
+        "type": "info"
+      }
+    },
+    {
+      "method": "shell.run",
+      "params": {
+        "message": "ollama serve > /dev/null 2>&1 &"
+      }
+    },
+    {
+      "method": "shell.run",
+      "params": {
+        "message": "sleep 4"
+      }
+    },
+    {
+      "method": "notify",
+      "params": {
+        "html": "Descargando modelo de IA (puede tardar varios minutos según tu conexión)...",
+        "type": "info"
+      }
+    },
+    {
+      "method": "shell.run",
+      "params": {
+        "message": "{{ram < 6 ? 'ollama pull llama3.2:1b' : ram < 12 ? 'ollama pull llama3.2:3b' : 'ollama pull llama3.1:8b'}}"
+      }
+    },
+    {
+      "method": "notify",
+      "params": {
+        "html": "Creando entorno Python...",
+        "type": "info"
+      }
+    },
+    {
+      "method": "shell.run",
+      "params": {
+        "message": "python -m venv venv",
+        "path": "{{cwd}}"
+      }
+    },
+    {
+      "method": "notify",
+      "params": {
+        "html": "Instalando dependencias Python...",
+        "type": "info"
+      }
+    },
+    {
+      "method": "shell.run",
+      "params": {
+        "message": "pip install -r requirements.txt",
+        "path": "{{cwd}}",
+        "venv": "venv"
+      }
+    },
+    {
+      "method": "shell.run",
+      "params": {
+        "message": "mkdir -p data/agents data/prompts/system data/sessions data/exports data/brands data/campaigns data/audit",
+        "path": "{{cwd}}"
+      }
+    },
+    {
+      "method": "shell.run",
+      "params": {
+        "message": "cp defaults/agents.json data/agents/agents.json 2>/dev/null || true",
+        "path": "{{cwd}}"
+      }
+    },
+    {
+      "method": "shell.run",
+      "params": {
+        "message": "cp defaults/prompts/*.md data/prompts/system/ 2>/dev/null || true",
+        "path": "{{cwd}}"
+      }
+    },
+    {
+      "method": "notify",
+      "params": {
+        "html": "CSS Brand Assistant instalado correctamente. ¡Listo para usar!",
+        "type": "success"
+      }
+    }
+  ]
+}

@@ -1,0 +1,2099 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CSS Brand Assistant</title>
+  <style>
+    /* ===== RESET & BASE ===== */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg-base:    #0f172a;
+      --bg-card:    #1e293b;
+      --bg-hover:   #334155;
+      --primary:    #6366f1;
+      --primary-h:  #4f46e5;
+      --accent:     #06b6d4;
+      --success:    #22c55e;
+      --warning:    #f59e0b;
+      --danger:     #ef4444;
+      --text-main:  #f1f5f9;
+      --text-muted: #94a3b8;
+      --border:     #334155;
+      --radius:     10px;
+      --sidebar-w:  240px;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg-base);
+      color: var(--text-main);
+      min-height: 100vh;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    a { color: var(--primary); text-decoration: none; }
+    button { cursor: pointer; border: none; outline: none; font-family: inherit; }
+    input, select, textarea {
+      font-family: inherit;
+      font-size: 14px;
+      background: var(--bg-base);
+      color: var(--text-main);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 8px 12px;
+      width: 100%;
+      transition: border-color 0.2s;
+    }
+    input:focus, select:focus, textarea:focus {
+      outline: none;
+      border-color: var(--primary);
+    }
+    textarea { resize: vertical; min-height: 80px; }
+    label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px; font-weight: 500; }
+
+    /* ===== LAYOUT ===== */
+    .app-layout { display: flex; min-height: 100vh; }
+
+    /* ===== SIDEBAR ===== */
+    .sidebar {
+      width: var(--sidebar-w);
+      background: var(--bg-card);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      position: fixed;
+      top: 0; left: 0; bottom: 0;
+      z-index: 100;
+      overflow-y: auto;
+    }
+    .sidebar-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 20px 16px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .sidebar-logo img { width: 36px; height: 36px; border-radius: 8px; }
+    .sidebar-logo-text { font-size: 13px; font-weight: 700; color: var(--text-main); line-height: 1.2; }
+    .sidebar-logo-sub { font-size: 10px; color: var(--text-muted); }
+
+    .sidebar-section { padding: 12px 8px 4px; }
+    .sidebar-section-label {
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 0 8px 6px;
+    }
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      border-radius: var(--radius);
+      color: var(--text-muted);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+      margin-bottom: 2px;
+    }
+    .nav-item:hover { background: var(--bg-hover); color: var(--text-main); }
+    .nav-item.active { background: var(--primary); color: #fff; }
+    .nav-item .nav-icon { width: 18px; text-align: center; font-size: 14px; }
+    .nav-badge {
+      margin-left: auto;
+      background: var(--primary);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 1px 6px;
+      border-radius: 20px;
+    }
+
+    .sidebar-brand-selector {
+      padding: 12px 8px;
+      border-top: 1px solid var(--border);
+      margin-top: auto;
+    }
+    .brand-select-label { font-size: 10px; color: var(--text-muted); margin-bottom: 4px; padding: 0 4px; }
+
+    /* ===== MAIN CONTENT ===== */
+    .main-content {
+      margin-left: var(--sidebar-w);
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+    .topbar {
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }
+    .topbar-title { font-size: 16px; font-weight: 700; }
+    .topbar-actions { display: flex; gap: 8px; align-items: center; }
+
+    .page { padding: 24px; display: none; }
+    .page.active { display: block; }
+
+    /* ===== CARDS ===== */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    .card-title { font-size: 15px; font-weight: 700; }
+    .card-subtitle { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+
+    /* ===== BUTTONS ===== */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 16px;
+      border-radius: var(--radius);
+      font-size: 13px;
+      font-weight: 600;
+      transition: all 0.15s;
+    }
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover { background: var(--primary-h); }
+    .btn-secondary { background: var(--bg-hover); color: var(--text-main); }
+    .btn-secondary:hover { background: var(--border); }
+    .btn-success { background: var(--success); color: #fff; }
+    .btn-danger { background: var(--danger); color: #fff; }
+    .btn-accent { background: var(--accent); color: var(--bg-base); }
+    .btn-sm { padding: 5px 10px; font-size: 12px; }
+    .btn-lg { padding: 12px 24px; font-size: 15px; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* ===== GRID ===== */
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+    .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+
+    /* ===== STAT CARDS ===== */
+    .stat-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+    }
+    .stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    .stat-value { font-size: 28px; font-weight: 800; margin: 4px 0; }
+    .stat-sub { font-size: 11px; color: var(--text-muted); }
+
+    /* ===== BRAND CARDS ===== */
+    .brand-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .brand-card:hover { border-color: var(--primary); transform: translateY(-2px); }
+    .brand-card.selected { border-color: var(--primary); background: rgba(99,102,241,0.08); }
+    .brand-avatar {
+      width: 48px; height: 48px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      font-weight: 800;
+      color: #fff;
+      margin-bottom: 10px;
+    }
+    .brand-name { font-size: 14px; font-weight: 700; margin-bottom: 2px; }
+    .brand-sector { font-size: 11px; color: var(--text-muted); }
+    .brand-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 20px;
+      margin-top: 8px;
+    }
+    .status-pending { background: rgba(245,158,11,0.15); color: var(--warning); }
+    .status-analyzing { background: rgba(6,182,212,0.15); color: var(--accent); }
+    .status-interviewing { background: rgba(99,102,241,0.15); color: var(--primary); }
+    .status-complete { background: rgba(34,197,94,0.15); color: var(--success); }
+    .status-error { background: rgba(239,68,68,0.15); color: var(--danger); }
+
+    /* ===== FORMS ===== */
+    .form-group { margin-bottom: 16px; }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
+
+    /* ===== MODAL ===== */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      z-index: 200;
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 28px;
+      width: 100%;
+      max-width: 560px;
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+    .modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+    .modal-title { font-size: 17px; font-weight: 700; }
+    .modal-close { background: none; color: var(--text-muted); font-size: 20px; padding: 4px; }
+    .modal-close:hover { color: var(--text-main); }
+
+    /* ===== CHAT ===== */
+    .chat-container {
+      display: flex;
+      flex-direction: column;
+      height: 500px;
+      background: var(--bg-base);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .chat-message {
+      max-width: 80%;
+      padding: 10px 14px;
+      border-radius: 12px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .chat-message.user {
+      background: var(--primary);
+      color: #fff;
+      align-self: flex-end;
+      border-bottom-right-radius: 4px;
+    }
+    .chat-message.assistant {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      align-self: flex-start;
+      border-bottom-left-radius: 4px;
+    }
+    .chat-message.system-msg {
+      background: rgba(6,182,212,0.1);
+      border: 1px solid rgba(6,182,212,0.3);
+      color: var(--accent);
+      align-self: center;
+      text-align: center;
+      font-size: 12px;
+      max-width: 90%;
+    }
+    .chat-input-area {
+      display: flex;
+      gap: 8px;
+      padding: 12px;
+      border-top: 1px solid var(--border);
+      background: var(--bg-card);
+    }
+    .chat-input { flex: 1; resize: none; min-height: 40px; max-height: 120px; }
+
+    /* ===== ADN VIEWER ===== */
+    .adn-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .adn-field {
+      background: var(--bg-base);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px;
+    }
+    .adn-field-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+    .adn-field-value { font-size: 13px; color: var(--text-main); }
+    .adn-field-value.empty { color: var(--text-muted); font-style: italic; }
+
+    /* ===== CAMPAIGN CARDS ===== */
+    .campaign-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .campaign-card:hover { border-color: var(--primary); }
+    .campaign-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 10px; }
+    .campaign-name { font-size: 14px; font-weight: 700; }
+    .campaign-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+    .campaign-channels { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 8px; }
+    .channel-tag {
+      background: rgba(99,102,241,0.15);
+      color: var(--primary);
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 20px;
+    }
+    .campaign-progress { margin-top: 10px; }
+    .progress-bar { height: 4px; background: var(--bg-hover); border-radius: 2px; overflow: hidden; }
+    .progress-fill { height: 100%; background: var(--primary); border-radius: 2px; transition: width 0.3s; }
+
+    /* ===== CALENDAR ===== */
+    .calendar-grid {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 4px;
+    }
+    .calendar-day-header {
+      text-align: center;
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--text-muted);
+      padding: 4px;
+      text-transform: uppercase;
+    }
+    .calendar-day {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px;
+      min-height: 80px;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+    .calendar-day:hover { border-color: var(--primary); }
+    .calendar-day.today { border-color: var(--accent); }
+    .calendar-day.other-month { opacity: 0.4; }
+    .calendar-day-num { font-size: 11px; font-weight: 700; margin-bottom: 4px; }
+    .calendar-pub {
+      background: var(--primary);
+      color: #fff;
+      font-size: 9px;
+      padding: 2px 4px;
+      border-radius: 4px;
+      margin-bottom: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .calendar-pub.instagram { background: #e1306c; }
+    .calendar-pub.linkedin { background: #0077b5; }
+    .calendar-pub.facebook { background: #1877f2; }
+    .calendar-pub.twitter, .calendar-pub.x { background: #1da1f2; }
+    .calendar-pub.whatsapp { background: #25d366; color: #000; }
+
+    /* ===== PUBLICATION EDITOR ===== */
+    .pub-editor {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    .pub-preview {
+      background: var(--bg-base);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+    }
+    .pub-preview-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .pub-preview-avatar {
+      width: 36px; height: 36px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+    }
+    .pub-preview-name { font-size: 13px; font-weight: 700; }
+    .pub-preview-handle { font-size: 11px; color: var(--text-muted); }
+    .pub-preview-image {
+      width: 100%;
+      aspect-ratio: 1;
+      background: var(--bg-hover);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+      font-size: 12px;
+      margin-bottom: 10px;
+    }
+    .pub-preview-text { font-size: 13px; line-height: 1.5; }
+    .pub-preview-hashtags { color: var(--primary); font-size: 12px; margin-top: 6px; }
+
+    /* ===== NOTIFICATIONS ===== */
+    .notification-area {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-width: 320px;
+    }
+    .notification {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px 16px;
+      font-size: 13px;
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      animation: slideIn 0.3s ease;
+    }
+    .notification.success { border-left: 3px solid var(--success); }
+    .notification.error { border-left: 3px solid var(--danger); }
+    .notification.info { border-left: 3px solid var(--accent); }
+    .notification.warning { border-left: 3px solid var(--warning); }
+    @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+    /* ===== LOADING ===== */
+    .loading-spinner {
+      display: inline-block;
+      width: 16px; height: 16px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(15,23,42,0.7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: var(--radius);
+      z-index: 10;
+    }
+    .loading-text { color: var(--text-muted); font-size: 13px; margin-top: 8px; }
+
+    /* ===== EMPTY STATES ===== */
+    .empty-state {
+      text-align: center;
+      padding: 48px 24px;
+      color: var(--text-muted);
+    }
+    .empty-icon { font-size: 48px; margin-bottom: 12px; }
+    .empty-title { font-size: 16px; font-weight: 700; color: var(--text-main); margin-bottom: 6px; }
+    .empty-desc { font-size: 13px; margin-bottom: 20px; }
+
+    /* ===== TABS ===== */
+    .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+    .tab {
+      padding: 8px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-muted);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+      transition: all 0.15s;
+    }
+    .tab:hover { color: var(--text-main); }
+    .tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+
+    /* ===== OLLAMA STATUS ===== */
+    .ollama-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--danger);
+    }
+    .status-dot.online { background: var(--success); }
+
+    /* ===== SCROLLBAR ===== */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--bg-hover); }
+
+    /* ===== RESPONSIVE ===== */
+    @media (max-width: 900px) {
+      .grid-4 { grid-template-columns: 1fr 1fr; }
+      .pub-editor { grid-template-columns: 1fr; }
+      .adn-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Notificaciones -->
+<div class="notification-area" id="notificationArea"></div>
+
+<!-- Layout principal -->
+<div class="app-layout">
+
+  <!-- SIDEBAR -->
+  <nav class="sidebar" id="sidebar">
+    <div class="sidebar-logo">
+      <img src="icon.png" alt="CSS Brand Assistant" onerror="this.style.display='none'" />
+      <div>
+        <div class="sidebar-logo-text">CSS Brand</div>
+        <div class="sidebar-logo-sub">Assistant</div>
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Principal</div>
+      <div class="nav-item active" onclick="navigateTo('dashboard')" id="nav-dashboard">
+        <span class="nav-icon">&#9632;</span> Dashboard
+      </div>
+      <div class="nav-item" onclick="navigateTo('brands')" id="nav-brands">
+        <span class="nav-icon">&#9670;</span> Marcas
+        <span class="nav-badge" id="brandsBadge">0</span>
+      </div>
+    </div>
+
+    <div class="sidebar-section" id="brandSection" style="display:none">
+      <div class="sidebar-section-label" id="activeBrandLabel">Marca activa</div>
+      <div class="nav-item" onclick="navigateTo('adn')" id="nav-adn">
+        <span class="nav-icon">&#9670;</span> ADN de Marca
+      </div>
+      <div class="nav-item" onclick="navigateTo('interview')" id="nav-interview">
+        <span class="nav-icon">&#9670;</span> Entrevista IA
+      </div>
+      <div class="nav-item" onclick="navigateTo('campaigns')" id="nav-campaigns">
+        <span class="nav-icon">&#9670;</span> Campañas
+      </div>
+      <div class="nav-item" onclick="navigateTo('calendar')" id="nav-calendar">
+        <span class="nav-icon">&#9670;</span> Calendario
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Sistema</div>
+      <div class="nav-item" onclick="navigateTo('agents')" id="nav-agents">
+        <span class="nav-icon">&#9670;</span> Agentes IA
+      </div>
+      <div class="nav-item" onclick="navigateTo('audit')" id="nav-audit">
+        <span class="nav-icon">&#9670;</span> Auditoría
+      </div>
+    </div>
+
+    <div class="sidebar-brand-selector">
+      <div class="brand-select-label">Ollama</div>
+      <div class="ollama-status">
+        <div class="status-dot" id="ollamaDot"></div>
+        <span id="ollamaStatusText">Verificando...</span>
+      </div>
+    </div>
+  </nav>
+
+  <!-- MAIN CONTENT -->
+  <div class="main-content">
+    <div class="topbar">
+      <div class="topbar-title" id="pageTitle">Dashboard</div>
+      <div class="topbar-actions" id="topbarActions"></div>
+    </div>
+
+    <!-- ===== PAGE: DASHBOARD ===== -->
+    <div class="page active" id="page-dashboard">
+      <div class="grid-4" style="margin-bottom:20px">
+        <div class="stat-card">
+          <div class="stat-label">Marcas registradas</div>
+          <div class="stat-value" id="statBrands">0</div>
+          <div class="stat-sub">en tu cuenta</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Campañas activas</div>
+          <div class="stat-value" id="statCampaigns">0</div>
+          <div class="stat-sub">en progreso</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Publicaciones</div>
+          <div class="stat-value" id="statPublications">0</div>
+          <div class="stat-sub">generadas</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">ADN completados</div>
+          <div class="stat-value" id="statADN">0</div>
+          <div class="stat-sub">marcas con ADN</div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">Comenzar</div>
+              <div class="card-subtitle">Pasos para tu primera marca</div>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <div style="display:flex;align-items:center;gap:12px;padding:12px;background:var(--bg-base);border-radius:8px">
+              <div style="width:28px;height:28px;border-radius:50%;background:var(--primary);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0">1</div>
+              <div>
+                <div style="font-size:13px;font-weight:600">Crear una marca</div>
+                <div style="font-size:11px;color:var(--text-muted)">Registra el nombre y sitio web de tu empresa</div>
+              </div>
+              <button class="btn btn-sm btn-primary" style="margin-left:auto" onclick="navigateTo('brands')">Ir</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;padding:12px;background:var(--bg-base);border-radius:8px">
+              <div style="width:28px;height:28px;border-radius:50%;background:var(--bg-hover);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0">2</div>
+              <div>
+                <div style="font-size:13px;font-weight:600">Analizar sitio web</div>
+                <div style="font-size:11px;color:var(--text-muted)">La IA extrae el ADN de tu marca automáticamente</div>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;padding:12px;background:var(--bg-base);border-radius:8px">
+              <div style="width:28px;height:28px;border-radius:50%;background:var(--bg-hover);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0">3</div>
+              <div>
+                <div style="font-size:13px;font-weight:600">Entrevista con IA</div>
+                <div style="font-size:11px;color:var(--text-muted)">Refina tu ADN con preguntas guiadas</div>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;padding:12px;background:var(--bg-base);border-radius:8px">
+              <div style="width:28px;height:28px;border-radius:50%;background:var(--bg-hover);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0">4</div>
+              <div>
+                <div style="font-size:13px;font-weight:600">Crear campaña</div>
+                <div style="font-size:11px;color:var(--text-muted)">Genera publicaciones para tus redes sociales</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">Estado del sistema</div>
+              <div class="card-subtitle">Modelos de IA disponibles</div>
+            </div>
+          </div>
+          <div id="systemStatusContent">
+            <div style="color:var(--text-muted);font-size:13px">Cargando estado...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== PAGE: BRANDS ===== -->
+    <div class="page" id="page-brands">
+      <div id="brandsContent">
+        <div class="empty-state">
+          <div class="loading-spinner"></div>
+          <div class="loading-text">Cargando marcas...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== PAGE: ADN ===== -->
+    <div class="page" id="page-adn">
+      <div id="adnContent">
+        <div class="empty-state">
+          <div class="empty-icon">&#9670;</div>
+          <div class="empty-title">Selecciona una marca</div>
+          <div class="empty-desc">Elige una marca para ver o construir su ADN empresarial</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== PAGE: INTERVIEW ===== -->
+    <div class="page" id="page-interview">
+      <div id="interviewContent">
+        <div class="empty-state">
+          <div class="empty-icon">&#9670;</div>
+          <div class="empty-title">Entrevista de descubrimiento</div>
+          <div class="empty-desc">Selecciona una marca para iniciar la entrevista con el agente de marketing</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== PAGE: CAMPAIGNS ===== -->
+    <div class="page" id="page-campaigns">
+      <div id="campaignsContent">
+        <div class="empty-state">
+          <div class="loading-spinner"></div>
+          <div class="loading-text">Cargando campañas...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== PAGE: CALENDAR ===== -->
+    <div class="page" id="page-calendar">
+      <div id="calendarContent">
+        <div class="empty-state">
+          <div class="empty-icon">&#9670;</div>
+          <div class="empty-title">Calendario de publicaciones</div>
+          <div class="empty-desc">Selecciona una campaña para ver el calendario</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== PAGE: AGENTS ===== -->
+    <div class="page" id="page-agents">
+      <div id="agentsContent">
+        <div class="empty-state">
+          <div class="loading-spinner"></div>
+          <div class="loading-text">Cargando agentes...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== PAGE: AUDIT ===== -->
+    <div class="page" id="page-audit">
+      <div id="auditContent">
+        <div class="empty-state">
+          <div class="loading-spinner"></div>
+          <div class="loading-text">Cargando auditoría...</div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /main-content -->
+</div><!-- /app-layout -->
+
+<!-- ===== MODAL: Nueva Marca ===== -->
+<div class="modal-overlay" id="modalNewBrand">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Nueva Marca</div>
+      <button class="modal-close" onclick="closeModal('modalNewBrand')">&#10005;</button>
+    </div>
+    <div class="form-group">
+      <label>Nombre de la marca *</label>
+      <input type="text" id="newBrandName" placeholder="Ej: Mi Empresa S.A." />
+    </div>
+    <div class="form-group">
+      <label>Sitio web</label>
+      <input type="url" id="newBrandWebsite" placeholder="https://miempresa.com" />
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Sector / Rubro</label>
+        <select id="newBrandSector">
+          <option value="">Seleccionar...</option>
+          <option value="retail">Retail / Comercio</option>
+          <option value="gastronomia">Gastronomía</option>
+          <option value="servicios">Servicios profesionales</option>
+          <option value="salud">Salud y bienestar</option>
+          <option value="educacion">Educación</option>
+          <option value="tecnologia">Tecnología</option>
+          <option value="construccion">Construcción</option>
+          <option value="moda">Moda y accesorios</option>
+          <option value="turismo">Turismo y hotelería</option>
+          <option value="otro">Otro</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Idioma principal</label>
+        <select id="newBrandLanguage">
+          <option value="es">Español</option>
+          <option value="en">Inglés</option>
+          <option value="pt">Portugués</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Descripción breve</label>
+      <textarea id="newBrandDescription" placeholder="¿A qué se dedica esta empresa?"></textarea>
+    </div>
+    <div class="form-group">
+      <label>Mercados objetivo</label>
+      <input type="text" id="newBrandMarkets" placeholder="Ej: Argentina, Chile, Uruguay" />
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-secondary" onclick="closeModal('modalNewBrand')">Cancelar</button>
+      <button class="btn btn-primary" onclick="createBrand()" id="btnCreateBrand">Crear Marca</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== MODAL: Nueva Campaña ===== -->
+<div class="modal-overlay" id="modalNewCampaign">
+  <div class="modal" style="max-width:680px">
+    <div class="modal-header">
+      <div class="modal-title">Nueva Campaña</div>
+      <button class="modal-close" onclick="closeModal('modalNewCampaign')">&#10005;</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Nombre de la campaña *</label>
+        <input type="text" id="campName" placeholder="Ej: Lanzamiento Verano 2025" />
+      </div>
+      <div class="form-group">
+        <label>Producto / Tema *</label>
+        <input type="text" id="campProduct" placeholder="Ej: Colección verano" />
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Objetivo principal *</label>
+      <select id="campObjective">
+        <option value="">Seleccionar objetivo...</option>
+        <option value="awareness">Awareness — Dar a conocer la marca</option>
+        <option value="engagement">Engagement — Generar interacción</option>
+        <option value="conversion">Conversión — Generar ventas o leads</option>
+        <option value="retention">Retención — Fidelizar clientes</option>
+        <option value="lanzamiento">Lanzamiento — Nuevo producto/servicio</option>
+        <option value="promocion">Promoción — Oferta o descuento</option>
+        <option value="educacion">Educación — Contenido de valor</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Público objetivo *</label>
+      <input type="text" id="campAudience" placeholder="Ej: Mujeres 25-40 años interesadas en moda" />
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Fecha de inicio *</label>
+        <input type="date" id="campStartDate" />
+      </div>
+      <div class="form-group">
+        <label>Fecha de cierre *</label>
+        <input type="date" id="campEndDate" />
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Canales de difusión *</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
+        <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-main);cursor:pointer">
+          <input type="checkbox" value="Instagram" id="chInstagram" style="width:auto" /> Instagram
+        </label>
+        <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-main);cursor:pointer">
+          <input type="checkbox" value="Facebook" id="chFacebook" style="width:auto" /> Facebook
+        </label>
+        <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-main);cursor:pointer">
+          <input type="checkbox" value="LinkedIn" id="chLinkedIn" style="width:auto" /> LinkedIn
+        </label>
+        <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-main);cursor:pointer">
+          <input type="checkbox" value="X" id="chX" style="width:auto" /> X (Twitter)
+        </label>
+        <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-main);cursor:pointer">
+          <input type="checkbox" value="WhatsApp" id="chWhatsApp" style="width:auto" /> WhatsApp
+        </label>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Frecuencia de publicación</label>
+        <select id="campFrequency">
+          <option value="diaria">Diaria</option>
+          <option value="cada_2_dias">Cada 2 días</option>
+          <option value="3_por_semana">3 veces por semana</option>
+          <option value="semanal">Semanal</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Presupuesto estimado (opcional)</label>
+        <input type="number" id="campBudget" placeholder="0" />
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Restricciones u observaciones</label>
+      <textarea id="campRestrictions" placeholder="Ej: No mencionar precios, evitar comparaciones con competencia..."></textarea>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-secondary" onclick="closeModal('modalNewCampaign')">Cancelar</button>
+      <button class="btn btn-primary" onclick="createCampaign()" id="btnCreateCampaign">Generar Campaña con IA</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== MODAL: Editor de Publicación ===== -->
+<div class="modal-overlay" id="modalPubEditor">
+  <div class="modal" style="max-width:800px">
+    <div class="modal-header">
+      <div class="modal-title" id="pubEditorTitle">Editar Publicación</div>
+      <button class="modal-close" onclick="closeModal('modalPubEditor')">&#10005;</button>
+    </div>
+    <div class="pub-editor" id="pubEditorContent">
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// ESTADO GLOBAL
+// ============================================================
+var API_BASE = '';
+var state = {
+  currentPage: 'dashboard',
+  activeBrand: null,
+  activeCampaign: null,
+  brands: [],
+  campaigns: [],
+  interviewSessionId: null,
+};
+
+// ============================================================
+// UTILIDADES
+// ============================================================
+function apiUrl(path) {
+  return API_BASE + '/api' + path;
+}
+
+function showNotification(message, type) {
+  type = type || 'info';
+  var area = document.getElementById('notificationArea');
+  var el = document.createElement('div');
+  el.className = 'notification ' + type;
+  el.innerHTML = message;
+  area.appendChild(el);
+  setTimeout(function() {
+    if (el.parentNode) el.parentNode.removeChild(el);
+  }, 4000);
+}
+
+function openModal(id) {
+  document.getElementById(id).classList.add('open');
+}
+
+function closeModal(id) {
+  document.getElementById(id).classList.remove('open');
+}
+
+function setLoading(btnId, loading, text) {
+  var btn = document.getElementById(btnId);
+  if (!btn) return;
+  if (loading) {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading-spinner"></span> ' + (text || 'Procesando...');
+  } else {
+    btn.disabled = false;
+    btn.innerHTML = text || btn.getAttribute('data-original') || 'Listo';
+  }
+}
+
+function formatDate(dateStr) {
+  if (!dateStr) return '—';
+  var d = new Date(dateStr);
+  return d.toLocaleDateString('es-AR', {day:'2-digit', month:'short', year:'numeric'});
+}
+
+function getStatusLabel(status) {
+  var labels = {
+    pending: 'Pendiente',
+    analyzing: 'Analizando...',
+    interviewing: 'En entrevista',
+    complete: 'Completo',
+    error: 'Error',
+    generating: 'Generando...',
+    active: 'Activa',
+    paused: 'Pausada',
+    completed: 'Completada',
+  };
+  return labels[status] || status;
+}
+
+function getStatusClass(status) {
+  var classes = {
+    pending: 'status-pending',
+    analyzing: 'status-analyzing',
+    interviewing: 'status-interviewing',
+    complete: 'status-complete',
+    error: 'status-error',
+    generating: 'status-analyzing',
+    active: 'status-complete',
+    paused: 'status-pending',
+    completed: 'status-complete',
+  };
+  return classes[status] || 'status-pending';
+}
+
+// ============================================================
+// NAVEGACIÓN
+// ============================================================
+function navigateTo(page) {
+  // Ocultar todas las páginas
+  var pages = document.querySelectorAll('.page');
+  for (var i = 0; i < pages.length; i++) {
+    pages[i].classList.remove('active');
+  }
+
+  // Desactivar todos los nav items
+  var navItems = document.querySelectorAll('.nav-item');
+  for (var j = 0; j < navItems.length; j++) {
+    navItems[j].classList.remove('active');
+  }
+
+  // Activar página y nav item
+  var targetPage = document.getElementById('page-' + page);
+  if (targetPage) targetPage.classList.add('active');
+
+  var targetNav = document.getElementById('nav-' + page);
+  if (targetNav) targetNav.classList.add('active');
+
+  state.currentPage = page;
+
+  // Actualizar título
+  var titles = {
+    dashboard: 'Dashboard',
+    brands: 'Marcas',
+    adn: 'ADN de Marca',
+    interview: 'Entrevista de Descubrimiento',
+    campaigns: 'Campañas',
+    calendar: 'Calendario',
+    agents: 'Configuración de Agentes',
+    audit: 'Auditoría',
+  };
+  document.getElementById('pageTitle').textContent = titles[page] || page;
+
+  // Actualizar acciones del topbar
+  updateTopbarActions(page);
+
+  // Cargar contenido de la página
+  loadPageContent(page);
+}
+
+function updateTopbarActions(page) {
+  var actions = document.getElementById('topbarActions');
+  actions.innerHTML = '';
+
+  if (page === 'brands') {
+    actions.innerHTML = '<button class="btn btn-primary" onclick="openModal(\'modalNewBrand\')">+ Nueva Marca</button>';
+  } else if (page === 'campaigns' && state.activeBrand) {
+    actions.innerHTML = '<button class="btn btn-primary" onclick="openModal(\'modalNewCampaign\')">+ Nueva Campaña</button>';
+  } else if (page === 'adn' && state.activeBrand) {
+    actions.innerHTML = '<button class="btn btn-success" onclick="approveADN()">&#10003; Aprobar ADN</button>';
+  }
+}
+
+function loadPageContent(page) {
+  if (page === 'dashboard') loadDashboard();
+  else if (page === 'brands') loadBrands();
+  else if (page === 'adn') loadADN();
+  else if (page === 'interview') loadInterview();
+  else if (page === 'campaigns') loadCampaigns();
+  else if (page === 'calendar') loadCalendar();
+  else if (page === 'agents') loadAgents();
+  else if (page === 'audit') loadAudit();
+}
+
+// ============================================================
+// DASHBOARD
+// ============================================================
+function loadDashboard() {
+  checkOllamaStatus();
+  loadDashboardStats();
+}
+
+function loadDashboardStats() {
+  fetch(apiUrl('/brands'))
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var brands = data.brands || [];
+      document.getElementById('statBrands').textContent = brands.length;
+      var complete = brands.filter(function(b) { return b.onboarding_status === 'complete'; }).length;
+      document.getElementById('statADN').textContent = complete;
+    })
+    .catch(function() {});
+}
+
+function checkOllamaStatus() {
+  fetch(apiUrl('/ollama/status'))
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var dot = document.getElementById('ollamaDot');
+      var text = document.getElementById('ollamaStatusText');
+      var sysContent = document.getElementById('systemStatusContent');
+
+      if (data.available) {
+        dot.classList.add('online');
+        text.textContent = 'Ollama activo';
+        var modelsHtml = '<div style="margin-bottom:8px;font-size:12px;color:var(--success)">&#10003; Ollama está corriendo</div>';
+        if (data.models && data.models.length > 0) {
+          modelsHtml += '<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Modelos disponibles:</div>';
+          modelsHtml += '<div style="display:flex;flex-wrap:wrap;gap:6px">';
+          for (var i = 0; i < data.models.length; i++) {
+            modelsHtml += '<span style="background:rgba(99,102,241,0.15);color:var(--primary);font-size:11px;padding:3px 8px;border-radius:20px">' + data.models[i] + '</span>';
+          }
+          modelsHtml += '</div>';
+        } else {
+          modelsHtml += '<div style="font-size:12px;color:var(--warning)">&#9888; No hay modelos instalados. Ejecuta: ollama pull llama3.2:3b</div>';
+        }
+        sysContent.innerHTML = modelsHtml;
+      } else {
+        dot.classList.remove('online');
+        text.textContent = 'Ollama no disponible';
+        sysContent.innerHTML = '<div style="font-size:12px;color:var(--danger)">&#10007; Ollama no está corriendo</div><div style="font-size:11px;color:var(--text-muted);margin-top:8px">Asegúrate de que Ollama esté instalado y ejecutándose en tu sistema.</div>';
+      }
+    })
+    .catch(function() {
+      document.getElementById('ollamaStatusText').textContent = 'Sin conexión';
+    });
+}
+
+// ============================================================
+// MARCAS
+// ============================================================
+function loadBrands() {
+  var content = document.getElementById('brandsContent');
+  content.innerHTML = '<div class="empty-state"><div class="loading-spinner"></div><div class="loading-text">Cargando marcas...</div></div>';
+
+  fetch(apiUrl('/brands'))
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      state.brands = data.brands || [];
+      document.getElementById('brandsBadge').textContent = state.brands.length;
+      renderBrands();
+    })
+    .catch(function(e) {
+      content.innerHTML = '<div class="empty-state"><div class="empty-title">Error al cargar marcas</div><div class="empty-desc">' + e.message + '</div></div>';
+    });
+}
+
+function renderBrands() {
+  var content = document.getElementById('brandsContent');
+
+  if (state.brands.length === 0) {
+    content.innerHTML = '<div class="empty-state"><div class="empty-icon">&#9670;</div><div class="empty-title">Sin marcas registradas</div><div class="empty-desc">Crea tu primera marca para comenzar a construir su identidad digital con IA</div><button class="btn btn-primary btn-lg" onclick="openModal(\'modalNewBrand\')">+ Crear primera marca</button></div>';
+    return;
+  }
+
+  var html = '<div class="grid-3">';
+  for (var i = 0; i < state.brands.length; i++) {
+    var b = state.brands[i];
+    var initial = (b.name || '?').charAt(0).toUpperCase();
+    var isSelected = state.activeBrand && state.activeBrand.id === b.id;
+    html += '<div class="brand-card' + (isSelected ? ' selected' : '') + '" onclick="selectBrand(\'' + b.id + '\')">';
+    html += '<div class="brand-avatar">' + initial + '</div>';
+    html += '<div class="brand-name">' + escapeHtml(b.name) + '</div>';
+    html += '<div class="brand-sector">' + escapeHtml(b.sector || 'Sin sector') + '</div>';
+    html += '<div><span class="brand-status ' + getStatusClass(b.onboarding_status) + '">' + getStatusLabel(b.onboarding_status) + '</span></div>';
+    if (b.website) {
+      html += '<div style="font-size:11px;color:var(--text-muted);margin-top:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(b.website) + '</div>';
+    }
+    html += '<div style="display:flex;gap:6px;margin-top:12px">';
+    html += '<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();selectBrandAndGo(\'' + b.id + '\',\'adn\')">Ver ADN</button>';
+    if (b.website && b.onboarding_status === 'pending') {
+      html += '<button class="btn btn-sm btn-accent" onclick="event.stopPropagation();analyzeWebsite(\'' + b.id + '\',\'' + escapeHtml(b.website) + '\')">Analizar web</button>';
+    }
+    html += '</div>';
+    html += '</div>';
+  }
+  html += '</div>';
+  content.innerHTML = html;
+}
+
+function selectBrand(brandId) {
+  for (var i = 0; i < state.brands.length; i++) {
+    if (state.brands[i].id === brandId) {
+      state.activeBrand = state.brands[i];
+      break;
+    }
+  }
+  if (!state.activeBrand) return;
+
+  document.getElementById('brandSection').style.display = 'block';
+  document.getElementById('activeBrandLabel').textContent = state.activeBrand.name;
+  renderBrands();
+  showNotification('Marca seleccionada: ' + state.activeBrand.name, 'info');
+}
+
+function selectBrandAndGo(brandId, page) {
+  selectBrand(brandId);
+  navigateTo(page);
+}
+
+function createBrand() {
+  var name = document.getElementById('newBrandName').value.trim();
+  if (!name) { showNotification('El nombre de la marca es obligatorio', 'error'); return; }
+
+  setLoading('btnCreateBrand', true, 'Creando...');
+
+  var payload = {
+    name: name,
+    website: document.getElementById('newBrandWebsite').value.trim() || null,
+    description: document.getElementById('newBrandDescription').value.trim() || null,
+    sector: document.getElementById('newBrandSector').value || null,
+    target_markets: document.getElementById('newBrandMarkets').value.trim() || null,
+    language: document.getElementById('newBrandLanguage').value,
+  };
+
+  fetch(apiUrl('/brands'), {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(brand) {
+      setLoading('btnCreateBrand', false, 'Crear Marca');
+      closeModal('modalNewBrand');
+      showNotification('Marca "' + brand.name + '" creada correctamente', 'success');
+      state.brands.unshift(brand);
+      document.getElementById('brandsBadge').textContent = state.brands.length;
+      renderBrands();
+      selectBrand(brand.id);
+
+      // Limpiar formulario
+      document.getElementById('newBrandName').value = '';
+      document.getElementById('newBrandWebsite').value = '';
+      document.getElementById('newBrandDescription').value = '';
+      document.getElementById('newBrandSector').value = '';
+      document.getElementById('newBrandMarkets').value = '';
+    })
+    .catch(function(e) {
+      setLoading('btnCreateBrand', false, 'Crear Marca');
+      showNotification('Error al crear marca: ' + e.message, 'error');
+    });
+}
+
+function analyzeWebsite(brandId, url) {
+  if (!url) { showNotification('La marca no tiene sitio web configurado', 'warning'); return; }
+  showNotification('Iniciando análisis del sitio web... Esto puede tomar unos minutos.', 'info');
+
+  fetch(apiUrl('/brands/' + brandId + '/analyze-website'), {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({brand_id: brandId, url: url}),
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      showNotification('Análisis iniciado. El ADN se construirá en segundo plano.', 'success');
+      // Actualizar estado local
+      for (var i = 0; i < state.brands.length; i++) {
+        if (state.brands[i].id === brandId) {
+          state.brands[i].onboarding_status = 'analyzing';
+          break;
+        }
+      }
+      renderBrands();
+      // Polling para verificar cuando termine
+      pollBrandStatus(brandId);
+    })
+    .catch(function(e) {
+      showNotification('Error al iniciar análisis: ' + e.message, 'error');
+    });
+}
+
+function pollBrandStatus(brandId) {
+  var interval = setInterval(function() {
+    fetch(apiUrl('/brands/' + brandId))
+      .then(function(r) { return r.json(); })
+      .then(function(brand) {
+        if (brand.onboarding_status !== 'analyzing') {
+          clearInterval(interval);
+          // Actualizar en state
+          for (var i = 0; i < state.brands.length; i++) {
+            if (state.brands[i].id === brandId) {
+              state.brands[i] = brand;
+              break;
+            }
+          }
+          if (state.activeBrand && state.activeBrand.id === brandId) {
+            state.activeBrand = brand;
+          }
+          renderBrands();
+          if (brand.onboarding_status === 'interviewing') {
+            showNotification('Análisis completado. ADN borrador listo. Puedes iniciar la entrevista.', 'success');
+          } else if (brand.onboarding_status === 'error') {
+            showNotification('Error en el análisis: ' + (brand.error || 'Error desconocido'), 'error');
+          }
+        }
+      })
+      .catch(function() { clearInterval(interval); });
+  }, 5000);
+}
+
+// ============================================================
+// ADN
+// ============================================================
+function loadADN() {
+  var content = document.getElementById('adnContent');
+  if (!state.activeBrand) {
+    content.innerHTML = '<div class="empty-state"><div class="empty-icon">&#9670;</div><div class="empty-title">Selecciona una marca</div><div class="empty-desc">Ve a la sección Marcas y selecciona una para ver su ADN</div><button class="btn btn-primary" onclick="navigateTo(\'brands\')">Ir a Marcas</button></div>';
+    return;
+  }
+
+  content.innerHTML = '<div class="empty-state"><div class="loading-spinner"></div><div class="loading-text">Cargando ADN...</div></div>';
+
+  fetch(apiUrl('/brands/' + state.activeBrand.id + '/adn'))
+    .then(function(r) {
+      if (!r.ok) throw new Error('ADN no encontrado');
+      return r.json();
+    })
+    .then(function(adn) {
+      renderADN(adn);
+    })
+    .catch(function() {
+      renderADNEmpty();
+    });
+}
+
+function renderADNEmpty() {
+  var content = document.getElementById('adnContent');
+  var brand = state.activeBrand;
+  content.innerHTML = '<div class="card"><div class="card-header"><div><div class="card-title">ADN de ' + escapeHtml(brand.name) + '</div><div class="card-subtitle">Aún no se ha construido el ADN de esta marca</div></div></div>' +
+    '<div class="empty-state" style="padding:32px 0">' +
+    '<div class="empty-icon">&#9670;</div>' +
+    '<div class="empty-title">Sin ADN todavía</div>' +
+    '<div class="empty-desc">Para construir el ADN, primero analiza el sitio web de la marca o inicia la entrevista directamente.</div>' +
+    '<div style="display:flex;gap:10px;justify-content:center">' +
+    (brand.website ? '<button class="btn btn-accent" onclick="analyzeWebsite(\'' + brand.id + '\',\'' + escapeHtml(brand.website) + '\')">Analizar sitio web</button>' : '') +
+    '<button class="btn btn-primary" onclick="navigateTo(\'interview\')">Iniciar entrevista</button>' +
+    '</div></div></div>';
+}
+
+function renderADN(adn) {
+  var content = document.getElementById('adnContent');
+  var fields = adn.fields || {};
+  var status = adn.status || 'draft';
+
+  var html = '<div class="card">';
+  html += '<div class="card-header">';
+  html += '<div><div class="card-title">ADN de ' + escapeHtml(state.activeBrand.name) + '</div>';
+  html += '<div class="card-subtitle">Versión ' + (adn.version || 'borrador') + ' &mdash; <span class="brand-status ' + getStatusClass(status) + '">' + (status === 'approved' ? 'Aprobado' : 'Borrador') + '</span></div></div>';
+  html += '<div style="display:flex;gap:8px">';
+  if (status !== 'approved') {
+    html += '<button class="btn btn-success btn-sm" onclick="approveADN()">&#10003; Aprobar ADN</button>';
+  }
+  html += '<button class="btn btn-secondary btn-sm" onclick="navigateTo(\'interview\')">Refinar con IA</button>';
+  html += '</div></div>';
+
+  var adnFields = [
+    {key: 'value_proposition', label: 'Propuesta de valor'},
+    {key: 'sector', label: 'Sector'},
+    {key: 'tone', label: 'Tono comunicacional'},
+    {key: 'formality_level', label: 'Nivel de formalidad'},
+    {key: 'target_audience', label: 'Público objetivo'},
+    {key: 'visual_style', label: 'Estilo visual'},
+    {key: 'typography', label: 'Tipografía'},
+    {key: 'personality_traits', label: 'Personalidad de marca'},
+    {key: 'products_services', label: 'Productos / Servicios'},
+    {key: 'brand_promises', label: 'Promesas de marca'},
+    {key: 'differentiators', label: 'Diferenciadores'},
+    {key: 'content_themes', label: 'Temas de contenido'},
+    {key: 'color_palette', label: 'Paleta de colores'},
+  ];
+
+  html += '<div class="adn-grid">';
+  for (var i = 0; i < adnFields.length; i++) {
+    var f = adnFields[i];
+    var val = fields[f.key];
+    var displayVal = '';
+    if (Array.isArray(val)) {
+      displayVal = val.length > 0 ? val.join(', ') : '';
+    } else {
+      displayVal = val || '';
+    }
+    html += '<div class="adn-field">';
+    html += '<div class="adn-field-label">' + f.label + '</div>';
+    html += '<div class="adn-field-value' + (displayVal ? '' : ' empty') + '">' + (displayVal ? escapeHtml(String(displayVal)) : 'Sin información') + '</div>';
+    html += '</div>';
+  }
+  html += '</div>';
+
+  if (fields.raw_analysis) {
+    html += '<div style="margin-top:16px"><div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">Análisis completo del agente</div>';
+    html += '<div style="background:var(--bg-base);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:12px;color:var(--text-muted);max-height:200px;overflow-y:auto;white-space:pre-wrap">' + escapeHtml(fields.raw_analysis) + '</div></div>';
+  }
+
+  html += '</div>';
+  content.innerHTML = html;
+}
+
+function approveADN() {
+  if (!state.activeBrand) return;
+  if (!confirm('¿Aprobar esta versión del ADN? Las campañas futuras usarán este ADN como base.')) return;
+
+  fetch(apiUrl('/brands/' + state.activeBrand.id + '/adn/approve'), {method: 'POST'})
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      showNotification('ADN aprobado correctamente (versión ' + data.version + ')', 'success');
+      state.activeBrand.onboarding_status = 'complete';
+      loadADN();
+    })
+    .catch(function(e) {
+      showNotification('Error al aprobar ADN: ' + e.message, 'error');
+    });
+}
+
+// ============================================================
+// ENTREVISTA
+// ============================================================
+function loadInterview() {
+  var content = document.getElementById('interviewContent');
+  if (!state.activeBrand) {
+    content.innerHTML = '<div class="empty-state"><div class="empty-icon">&#9670;</div><div class="empty-title">Selecciona una marca</div><div class="empty-desc">Ve a la sección Marcas y selecciona una para iniciar la entrevista</div><button class="btn btn-primary" onclick="navigateTo(\'brands\')">Ir a Marcas</button></div>';
+    return;
+  }
+
+  content.innerHTML = '<div class="card"><div class="card-header"><div><div class="card-title">Entrevista de Descubrimiento</div><div class="card-subtitle">Marca: ' + escapeHtml(state.activeBrand.name) + '</div></div></div>' +
+    '<p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">El agente de marketing te hará preguntas para construir y refinar el ADN de tu marca. Responde con naturalidad; el sistema extraerá los insights automáticamente.</p>' +
+    '<div class="chat-container" id="chatContainer">' +
+    '<div class="chat-messages" id="chatMessages">' +
+    '<div class="chat-message system-msg">Sesión iniciada. El agente está listo para comenzar la entrevista.</div>' +
+    '</div>' +
+    '<div class="chat-input-area">' +
+    '<textarea class="chat-input" id="chatInput" placeholder="Escribe tu respuesta..." onkeydown="handleChatKey(event)"></textarea>' +
+    '<button class="btn btn-primary" onclick="sendInterviewMessage()" id="btnSendChat">Enviar</button>' +
+    '</div></div>' +
+    '<div style="margin-top:12px;display:flex;gap:8px">' +
+    '<button class="btn btn-secondary btn-sm" onclick="startInterview()">Iniciar entrevista</button>' +
+    '<button class="btn btn-accent btn-sm" onclick="navigateTo(\'adn\')">Ver ADN actualizado</button>' +
+    '</div></div>';
+
+  // Auto-iniciar entrevista
+  startInterview();
+}
+
+function startInterview() {
+  var greeting = '¡Hola! Estoy aquí para ayudarte a construir el ADN de tu marca. Para comenzar, cuéntame: ¿cuál es la historia de ' + state.activeBrand.name + '? ¿Cómo nació y qué problema resuelve para sus clientes?';
+  addChatMessage('assistant', greeting);
+}
+
+function handleChatKey(event) {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    sendInterviewMessage();
+  }
+}
+
+function sendInterviewMessage() {
+  var input = document.getElementById('chatInput');
+  var message = input.value.trim();
+  if (!message) return;
+
+  addChatMessage('user', message);
+  input.value = '';
+
+  var btn = document.getElementById('btnSendChat');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="loading-spinner"></span>';
+
+  var payload = {
+    brand_id: state.activeBrand.id,
+    session_id: state.interviewSessionId,
+    message: message,
+  };
+
+  fetch(apiUrl('/brands/' + state.activeBrand.id + '/interview'), {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      btn.disabled = false;
+      btn.innerHTML = 'Enviar';
+      state.interviewSessionId = data.session_id;
+      addChatMessage('assistant', data.response);
+    })
+    .catch(function(e) {
+      btn.disabled = false;
+      btn.innerHTML = 'Enviar';
+      addChatMessage('system-msg', 'Error al contactar al agente: ' + e.message);
+    });
+}
+
+function addChatMessage(role, content) {
+  var messages = document.getElementById('chatMessages');
+  if (!messages) return;
+  var el = document.createElement('div');
+  el.className = 'chat-message ' + role;
+  el.textContent = content;
+  messages.appendChild(el);
+  messages.scrollTop = messages.scrollHeight;
+}
+
+// ============================================================
+// CAMPAÑAS
+// ============================================================
+function loadCampaigns() {
+  var content = document.getElementById('campaignsContent');
+  if (!state.activeBrand) {
+    content.innerHTML = '<div class="empty-state"><div class="empty-icon">&#9670;</div><div class="empty-title">Selecciona una marca</div><div class="empty-desc">Ve a la sección Marcas y selecciona una para gestionar sus campañas</div><button class="btn btn-primary" onclick="navigateTo(\'brands\')">Ir a Marcas</button></div>';
+    return;
+  }
+
+  content.innerHTML = '<div class="empty-state"><div class="loading-spinner"></div><div class="loading-text">Cargando campañas...</div></div>';
+
+  fetch(apiUrl('/brands/' + state.activeBrand.id + '/campaigns'))
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      state.campaigns = data.campaigns || [];
+      renderCampaigns();
+    })
+    .catch(function(e) {
+      content.innerHTML = '<div class="empty-state"><div class="empty-title">Error</div><div class="empty-desc">' + e.message + '</div></div>';
+    });
+}
+
+function renderCampaigns() {
+  var content = document.getElementById('campaignsContent');
+
+  if (state.campaigns.length === 0) {
+    content.innerHTML = '<div class="empty-state"><div class="empty-icon">&#9670;</div><div class="empty-title">Sin campañas</div><div class="empty-desc">Crea tu primera campaña para generar publicaciones con IA</div><button class="btn btn-primary btn-lg" onclick="openModal(\'modalNewCampaign\')">+ Crear primera campaña</button></div>';
+    return;
+  }
+
+  var html = '<div class="grid-2">';
+  for (var i = 0; i < state.campaigns.length; i++) {
+    var c = state.campaigns[i];
+    html += '<div class="campaign-card" onclick="selectCampaign(\'' + c.id + '\')">';
+    html += '<div class="campaign-header">';
+    html += '<div><div class="campaign-name">' + escapeHtml(c.name) + '</div>';
+    html += '<div class="campaign-meta">' + escapeHtml(c.objective) + ' &bull; ' + formatDate(c.start_date) + ' al ' + formatDate(c.end_date) + '</div></div>';
+    html += '<span class="brand-status ' + getStatusClass(c.status) + '">' + getStatusLabel(c.status) + '</span>';
+    html += '</div>';
+    html += '<div class="campaign-channels">';
+    var channels = c.channels || [];
+    for (var j = 0; j < channels.length; j++) {
+      html += '<span class="channel-tag">' + channels[j] + '</span>';
+    }
+    html += '</div>';
+    if (c.publications_count > 0) {
+      html += '<div class="campaign-progress"><div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">' + c.publications_count + ' publicaciones generadas</div><div class="progress-bar"><div class="progress-fill" style="width:' + Math.min(100, c.publications_count * 5) + '%"></div></div></div>';
+    }
+    html += '<div style="display:flex;gap:6px;margin-top:12px">';
+    html += '<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();viewCampaignCalendar(\'' + c.id + '\')">Ver calendario</button>';
+    html += '<button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();viewCampaignPublications(\'' + c.id + '\')">Ver publicaciones</button>';
+    html += '</div>';
+    html += '</div>';
+  }
+  html += '</div>';
+  content.innerHTML = html;
+}
+
+function selectCampaign(campaignId) {
+  for (var i = 0; i < state.campaigns.length; i++) {
+    if (state.campaigns[i].id === campaignId) {
+      state.activeCampaign = state.campaigns[i];
+      break;
+    }
+  }
+}
+
+function viewCampaignCalendar(campaignId) {
+  selectCampaign(campaignId);
+  navigateTo('calendar');
+}
+
+function viewCampaignPublications(campaignId) {
+  selectCampaign(campaignId);
+  loadPublicationsView(campaignId);
+}
+
+function createCampaign() {
+  var name = document.getElementById('campName').value.trim();
+  var objective = document.getElementById('campObjective').value;
+  var product = document.getElementById('campProduct').value.trim();
+  var audience = document.getElementById('campAudience').value.trim();
+  var startDate = document.getElementById('campStartDate').value;
+  var endDate = document.getElementById('campEndDate').value;
+
+  if (!name || !objective || !product || !audience || !startDate || !endDate) {
+    showNotification('Completa todos los campos obligatorios', 'error');
+    return;
+  }
+
+  var channels = [];
+  var checkboxes = ['chInstagram', 'chFacebook', 'chLinkedIn', 'chX', 'chWhatsApp'];
+  for (var i = 0; i < checkboxes.length; i++) {
+    var cb = document.getElementById(checkboxes[i]);
+    if (cb && cb.checked) channels.push(cb.value);
+  }
+
+  if (channels.length === 0) {
+    showNotification('Selecciona al menos un canal', 'error');
+    return;
+  }
+
+  setLoading('btnCreateCampaign', true, 'Generando con IA...');
+
+  var payload = {
+    brand_id: state.activeBrand.id,
+    name: name,
+    objective: objective,
+    product_or_topic: product,
+    target_audience: audience,
+    start_date: startDate,
+    end_date: endDate,
+    channels: channels,
+    frequency: document.getElementById('campFrequency').value,
+    budget: parseFloat(document.getElementById('campBudget').value) || null,
+    restrictions: document.getElementById('campRestrictions').value.trim() || null,
+  };
+
+  fetch(apiUrl('/brands/' + state.activeBrand.id + '/campaigns'), {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(campaign) {
+      setLoading('btnCreateCampaign', false, 'Generar Campaña con IA');
+      closeModal('modalNewCampaign');
+      showNotification('Campaña creada. Generando publicaciones con IA...', 'success');
+      state.campaigns.unshift(campaign);
+      renderCampaigns();
+      // Polling para verificar cuando termine
+      pollCampaignStatus(campaign.id);
+    })
+    .catch(function(e) {
+      setLoading('btnCreateCampaign', false, 'Generar Campaña con IA');
+      showNotification('Error al crear campaña: ' + e.message, 'error');
+    });
+}
+
+function pollCampaignStatus(campaignId) {
+  var interval = setInterval(function() {
+    fetch(apiUrl('/brands/' + state.activeBrand.id + '/campaigns'))
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var campaigns = data.campaigns || [];
+        for (var i = 0; i < campaigns.length; i++) {
+          if (campaigns[i].id === campaignId && campaigns[i].status !== 'generating') {
+            clearInterval(interval);
+            state.campaigns = campaigns;
+            renderCampaigns();
+            if (campaigns[i].status === 'active') {
+              showNotification('Campaña lista con ' + campaigns[i].publications_count + ' publicaciones generadas', 'success');
+            }
+            break;
+          }
+        }
+      })
+      .catch(function() { clearInterval(interval); });
+  }, 5000);
+}
+
+// ============================================================
+// CALENDARIO
+// ============================================================
+function loadCalendar() {
+  var content = document.getElementById('calendarContent');
+  if (!state.activeCampaign) {
+    if (state.campaigns.length > 0) {
+      state.activeCampaign = state.campaigns[0];
+    } else {
+      content.innerHTML = '<div class="empty-state"><div class="empty-icon">&#9670;</div><div class="empty-title">Sin campaña seleccionada</div><div class="empty-desc">Ve a Campañas y selecciona una para ver el calendario</div><button class="btn btn-primary" onclick="navigateTo(\'campaigns\')">Ir a Campañas</button></div>';
+      return;
+    }
+  }
+
+  content.innerHTML = '<div class="empty-state"><div class="loading-spinner"></div><div class="loading-text">Cargando publicaciones...</div></div>';
+
+  fetch(apiUrl('/campaigns/' + state.activeCampaign.id + '/publications'))
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      renderCalendar(data.publications || []);
+    })
+    .catch(function(e) {
+      content.innerHTML = '<div class="empty-state"><div class="empty-title">Error</div><div class="empty-desc">' + e.message + '</div></div>';
+    });
+}
+
+function renderCalendar(publications) {
+  var content = document.getElementById('calendarContent');
+  var camp = state.activeCampaign;
+
+  // Agrupar publicaciones por fecha
+  var byDate = {};
+  for (var i = 0; i < publications.length; i++) {
+    var pub = publications[i];
+    var date = (pub.scheduled_at || '').split(' ')[0];
+    if (!byDate[date]) byDate[date] = [];
+    byDate[date].push(pub);
+  }
+
+  var html = '<div class="card" style="margin-bottom:16px">';
+  html += '<div class="card-header"><div><div class="card-title">Campaña: ' + escapeHtml(camp.name) + '</div>';
+  html += '<div class="card-subtitle">' + formatDate(camp.start_date) + ' al ' + formatDate(camp.end_date) + ' &bull; ' + publications.length + ' publicaciones</div></div>';
+  html += '<div style="display:flex;gap:8px">';
+  html += '<select id="calendarChannelFilter" onchange="filterCalendar()" style="width:auto;padding:6px 10px;font-size:12px"><option value="">Todos los canales</option>';
+  var channels = camp.channels || [];
+  for (var j = 0; j < channels.length; j++) {
+    html += '<option value="' + channels[j] + '">' + channels[j] + '</option>';
+  }
+  html += '</select></div></div>';
+
+  // Vista de lista de publicaciones
+  html += '<div id="calendarPublicationsList">';
+  html += renderPublicationsList(publications);
+  html += '</div>';
+  html += '</div>';
+
+  content.innerHTML = html;
+  content.setAttribute('data-publications', JSON.stringify(publications));
+}
+
+function renderPublicationsList(publications) {
+  if (publications.length === 0) {
+    return '<div class="empty-state" style="padding:32px 0"><div class="empty-title">Sin publicaciones</div><div class="empty-desc">La campaña aún está generando publicaciones o no hay resultados para el filtro seleccionado</div></div>';
+  }
+
+  var html = '<div style="display:flex;flex-direction:column;gap:8px">';
+  for (var i = 0; i < publications.length; i++) {
+    var pub = publications[i];
+    var channelClass = (pub.channel || '').toLowerCase().replace(' ', '');
+    html += '<div style="display:flex;align-items:flex-start;gap:12px;padding:12px;background:var(--bg-base);border:1px solid var(--border);border-radius:8px;cursor:pointer" onclick="openPubEditor(\'' + pub.id + '\')">';
+    html += '<div style="display:flex;flex-direction:column;align-items:center;gap:4px;min-width:60px">';
+    html += '<span class="calendar-pub ' + channelClass + '" style="font-size:10px;padding:3px 8px;border-radius:20px;white-space:nowrap">' + escapeHtml(pub.channel || '') + '</span>';
+    html += '<span style="font-size:10px;color:var(--text-muted)">' + escapeHtml((pub.scheduled_at || '').split(' ')[0]) + '</span>';
+    html += '</div>';
+    html += '<div style="flex:1;min-width:0">';
+    html += '<div style="font-size:12px;font-weight:600;color:var(--primary);margin-bottom:2px">' + escapeHtml(pub.stage || '') + '</div>';
+    html += '<div style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml((pub.text || '').substring(0, 120)) + '</div>';
+    if (pub.hashtags && pub.hashtags.length > 0) {
+      html += '<div style="font-size:11px;color:var(--primary);margin-top:4px">' + pub.hashtags.slice(0, 3).join(' ') + '</div>';
+    }
+    html += '</div>';
+    html += '<div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">';
+    html += '<span class="brand-status ' + getPubStatusClass(pub.status) + '">' + getPubStatusLabel(pub.status) + '</span>';
+    html += '<button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();openPubEditor(\'' + pub.id + '\')">Editar</button>';
+    html += '</div>';
+    html += '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function filterCalendar() {
+  var filter = document.getElementById('calendarChannelFilter').value;
+  var content = document.getElementById('calendarContent');
+  var allPubs = JSON.parse(content.getAttribute('data-publications') || '[]');
+  var filtered = filter ? allPubs.filter(function(p) { return p.channel === filter; }) : allPubs;
+  document.getElementById('calendarPublicationsList').innerHTML = renderPublicationsList(filtered);
+}
+
+function getPubStatusLabel(status) {
+  var labels = {pending: 'Pendiente', ready: 'Lista', published: 'Publicada', omitted: 'Omitida', rescheduled: 'Reprogramada'};
+  return labels[status] || status || 'Pendiente';
+}
+
+function getPubStatusClass(status) {
+  var classes = {pending: 'status-pending', ready: 'status-complete', published: 'status-complete', omitted: 'status-error', rescheduled: 'status-analyzing'};
+  return classes[status] || 'status-pending';
+}
+
+function loadPublicationsView(campaignId) {
+  navigateTo('calendar');
+}
+
+// ============================================================
+// EDITOR DE PUBLICACIÓN
+// ============================================================
+function openPubEditor(pubId) {
+  if (!state.activeCampaign) return;
+
+  fetch(apiUrl('/campaigns/' + state.activeCampaign.id + '/publications/' + pubId))
+    .then(function(r) { return r.json(); })
+    .then(function(pub) {
+      renderPubEditor(pub);
+      openModal('modalPubEditor');
+    })
+    .catch(function(e) {
+      showNotification('Error al cargar publicación: ' + e.message, 'error');
+    });
+}
+
+function renderPubEditor(pub) {
+  document.getElementById('pubEditorTitle').textContent = 'Editar — ' + (pub.channel || '') + ' — ' + (pub.stage || '');
+
+  var channelClass = (pub.channel || '').toLowerCase().replace(' ', '');
+  var hashtags = (pub.hashtags || []).join(' ');
+
+  var html = '<div>';
+  // Preview
+  html += '<div class="pub-preview">';
+  html += '<div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:8px">' + escapeHtml(pub.channel || '') + ' Preview</div>';
+  html += '<div class="pub-preview-header">';
+  html += '<div class="pub-preview-avatar"></div>';
+  html += '<div><div class="pub-preview-name">' + escapeHtml(state.activeBrand ? state.activeBrand.name : 'Tu Marca') + '</div>';
+  html += '<div class="pub-preview-handle">@tumarca</div></div>';
+  html += '</div>';
+  html += '<div class="pub-preview-image">&#9670; Imagen del post</div>';
+  html += '<div class="pub-preview-text" id="previewText">' + escapeHtml(pub.text || '') + '</div>';
+  html += '<div class="pub-preview-hashtags" id="previewHashtags">' + escapeHtml(hashtags) + '</div>';
+  html += '</div>';
+  html += '</div>';
+
+  // Editor
+  html += '<div>';
+  html += '<div style="margin-bottom:4px;font-size:11px;color:var(--text-muted)">Etapa: <strong>' + escapeHtml(pub.stage || '') + '</strong> &bull; Objetivo: <strong>' + escapeHtml(pub.objective || '') + '</strong></div>';
+  html += '<div class="form-group"><label>Texto del post</label>';
+  html += '<textarea id="editPubText" style="min-height:120px" oninput="updatePreview()">' + escapeHtml(pub.text || '') + '</textarea></div>';
+  html += '<div class="form-group"><label>Hashtags</label>';
+  html += '<input type="text" id="editPubHashtags" value="' + escapeHtml(hashtags) + '" oninput="updatePreviewHashtags()" /></div>';
+  html += '<div class="form-group"><label>CTA (Llamada a la acción)</label>';
+  html += '<input type="text" id="editPubCTA" value="' + escapeHtml(pub.cta || '') + '" /></div>';
+  html += '<div class="form-group"><label>Prompt de imagen</label>';
+  html += '<textarea id="editPubImagePrompt" style="min-height:60px">' + escapeHtml(pub.image_prompt || '') + '</textarea></div>';
+  html += '<div class="form-group"><label>Estado de publicación</label>';
+  html += '<select id="editPubStatus">';
+  var statuses = [{v:'pending',l:'Pendiente'},{v:'ready',l:'Lista para publicar'},{v:'published',l:'Publicada'},{v:'omitted',l:'Omitida'},{v:'rescheduled',l:'Reprogramada'}];
+  for (var i = 0; i < statuses.length; i++) {
+    html += '<option value="' + statuses[i].v + '"' + (pub.status === statuses[i].v ? ' selected' : '') + '>' + statuses[i].l + '</option>';
+  }
+  html += '</select></div>';
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+  html += '<button class="btn btn-primary btn-sm" onclick="savePubEdits(\'' + pub.id + '\')">Guardar cambios</button>';
+  html += '<button class="btn btn-accent btn-sm" onclick="regeneratePub(\'' + pub.id + '\')">Regenerar con IA</button>';
+  html += '<button class="btn btn-secondary btn-sm" onclick="copyPubText()">Copiar texto</button>';
+  html += '</div>';
+  html += '</div>';
+
+  document.getElementById('pubEditorContent').innerHTML = html;
+  document.getElementById('pubEditorContent').setAttribute('data-pub-id', pub.id);
+}
+
+function updatePreview() {
+  var text = document.getElementById('editPubText');
+  var preview = document.getElementById('previewText');
+  if (text && preview) preview.textContent = text.value;
+}
+
+function updatePreviewHashtags() {
+  var input = document.getElementById('editPubHashtags');
+  var preview = document.getElementById('previewHashtags');
+  if (input && preview) preview.textContent = input.value;
+}
+
+function savePubEdits(pubId) {
+  var text = document.getElementById('editPubText').value;
+  var hashtagsRaw = document.getElementById('editPubHashtags').value;
+  var hashtags = hashtagsRaw.split(/\s+/).filter(function(h) { return h.startsWith('#'); });
+  var cta = document.getElementById('editPubCTA').value;
+  var imagePrompt = document.getElementById('editPubImagePrompt').value;
+  var status = document.getElementById('editPubStatus').value;
+
+  var payload = {text: text, hashtags: hashtags, cta: cta, image_prompt: imagePrompt, status: status};
+
+  fetch(apiUrl('/campaigns/' + state.activeCampaign.id + '/publications/' + pubId), {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  })
+    .then(function(r) { return r.json(); })
+    .then(function() {
+      showNotification('Publicación guardada correctamente', 'success');
+      closeModal('modalPubEditor');
+      loadCalendar();
+    })
+    .catch(function(e) {
+      showNotification('Error al guardar: ' + e.message, 'error');
+    });
+}
+
+function regeneratePub(pubId) {
+  var instruction = prompt('Instrucción para regenerar (opcional):\nEj: "más formal", "más corto", "más emocional"');
+  showNotification('Regenerando publicación con IA...', 'info');
+
+  var url = apiUrl('/campaigns/' + state.activeCampaign.id + '/publications/' + pubId + '/regenerate');
+  if (instruction) url += '?instruction=' + encodeURIComponent(instruction);
+
+  fetch(url, {method: 'POST'})
+    .then(function(r) { return r.json(); })
+    .then(function(pub) {
+      showNotification('Publicación regenerada', 'success');
+      renderPubEditor(pub);
+    })
+    .catch(function(e) {
+      showNotification('Error al regenerar: ' + e.message, 'error');
+    });
+}
+
+function copyPubText() {
+  var text = document.getElementById('editPubText');
+  if (text) {
+    navigator.clipboard.writeText(text.value).then(function() {
+      showNotification('Texto copiado al portapapeles', 'success');
+    });
+  }
+}
+
+// ============================================================
+// AGENTES
+// ============================================================
+function loadAgents() {
+  var content = document.getElementById('agentsContent');
+
+  fetch(apiUrl('/agents'))
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      renderAgents(data.agents || []);
+    })
+    .catch(function(e) {
+      content.innerHTML = '<div class="empty-state"><div class="empty-title">Error</div><div class="empty-desc">' + e.message + '</div></div>';
+    });
+}
+
+function renderAgents(agents) {
+  var content = document.getElementById('agentsContent');
+
+  var html = '<div class="grid-2">';
+  for (var i = 0; i < agents.length; i++) {
+    var a = agents[i];
+    html += '<div class="card">';
+    html += '<div class="card-header"><div><div class="card-title">' + escapeHtml(a.name) + '</div>';
+    html += '<div class="card-subtitle">' + escapeHtml(a.description) + '</div></div>';
+    html += '<span class="brand-status status-complete">' + escapeHtml(a.role) + '</span>';
+    html += '</div>';
+    html += '<div style="margin-bottom:12px">';
+    html += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">Modelo</div>';
+    html += '<span style="background:rgba(99,102,241,0.15);color:var(--primary);font-size:11px;padding:3px 8px;border-radius:20px">' + escapeHtml(a.model || '') + '</span>';
+    html += '</div>';
+    html += '<div style="margin-bottom:12px">';
+    html += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">Skills</div>';
+    var skills = a.skills || [];
+    for (var j = 0; j < skills.length; j++) {
+      html += '<span style="background:rgba(6,182,212,0.1);color:var(--accent);font-size:10px;padding:2px 6px;border-radius:20px;margin-right:4px">' + escapeHtml(skills[j]) + '</span>';
+    }
+    html += '</div>';
+    html += '<div style="margin-bottom:12px">';
+    html += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">System Prompt</div>';
+    html += '<textarea id="prompt_' + a.id + '" style="min-height:80px;font-size:11px">' + escapeHtml(a.system_prompt || '') + '</textarea>';
+    html += '</div>';
+    html += '<div style="display:flex;gap:8px">';
+    html += '<button class="btn btn-sm btn-primary" onclick="saveAgentPrompt(\'' + a.id + '\')">Guardar prompt</button>';
+    html += '</div>';
+    html += '</div>';
+  }
+  html += '</div>';
+  content.innerHTML = html;
+}
+
+function saveAgentPrompt(agentId) {
+  var promptEl = document.getElementById('prompt_' + agentId);
+  if (!promptEl) return;
+
+  fetch(apiUrl('/agents/' + agentId), {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({agent_id: agentId, system_prompt: promptEl.value}),
+  })
+    .then(function(r) { return r.json(); })
+    .then(function() {
+      showNotification('Prompt del agente actualizado', 'success');
+    })
+    .catch(function(e) {
+      showNotification('Error: ' + e.message, 'error');
+    });
+}
+
+// ============================================================
+// AUDITORÍA
+// ============================================================
+function loadAudit() {
+  var content = document.getElementById('auditContent');
+
+  fetch(apiUrl('/audit'))
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      renderAudit(data.entries || []);
+    })
+    .catch(function(e) {
+      content.innerHTML = '<div class="empty-state"><div class="empty-title">Error</div><div class="empty-desc">' + e.message + '</div></div>';
+    });
+}
+
+function renderAudit(entries) {
+  var content = document.getElementById('auditContent');
+
+  if (entries.length === 0) {
+    content.innerHTML = '<div class="empty-state"><div class="empty-icon">&#9670;</div><div class="empty-title">Sin registros de auditoría</div><div class="empty-desc">Los registros aparecerán aquí cuando los agentes ejecuten tareas</div></div>';
+    return;
+  }
+
+  var html = '<div class="card"><div class="card-header"><div class="card-title">Registros de Auditoría</div><div class="card-subtitle">' + entries.length + ' entradas recientes</div></div>';
+  html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">';
+  html += '<thead><tr style="border-bottom:1px solid var(--border)">';
+  html += '<th style="text-align:left;padding:8px;color:var(--text-muted)">Hora</th>';
+  html += '<th style="text-align:left;padding:8px;color:var(--text-muted)">Agente</th>';
+  html += '<th style="text-align:left;padding:8px;color:var(--text-muted)">Tarea</th>';
+  html += '<th style="text-align:left;padding:8px;color:var(--text-muted)">Modelo</th>';
+  html += '<th style="text-align:left;padding:8px;color:var(--text-muted)">Latencia</th>';
+  html += '<th style="text-align:left;padding:8px;color:var(--text-muted)">Estado</th>';
+  html += '</tr></thead><tbody>';
+
+  for (var i = 0; i < entries.length; i++) {
+    var e = entries[i];
+    var time = new Date(e.timestamp).toLocaleTimeString('es-AR');
+    html += '<tr style="border-bottom:1px solid var(--border)">';
+    html += '<td style="padding:8px;color:var(--text-muted)">' + time + '</td>';
+    html += '<td style="padding:8px">' + escapeHtml(e.agent_id || '') + '</td>';
+    html += '<td style="padding:8px">' + escapeHtml(e.task || '') + '</td>';
+    html += '<td style="padding:8px;color:var(--primary)">' + escapeHtml(e.model || '') + '</td>';
+    html += '<td style="padding:8px;color:var(--text-muted)">' + (e.latency_ms || 0) + 'ms</td>';
+    html += '<td style="padding:8px"><span class="brand-status ' + (e.success ? 'status-complete' : 'status-error') + '">' + (e.success ? 'OK' : 'Error') + '</span></td>';
+    html += '</tr>';
+  }
+  html += '</tbody></table></div></div>';
+  content.innerHTML = html;
+}
+
+// ============================================================
+// UTILIDADES
+// ============================================================
+function escapeHtml(text) {
+  if (!text) return '';
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+// ============================================================
+// INICIALIZACIÓN
+// ============================================================
+function init() {
+  // Detectar URL base del API
+  API_BASE = window.location.origin;
+
+  // Cargar estado inicial
+  loadDashboard();
+  checkOllamaStatus();
+
+  // Verificar estado de Ollama cada 30 segundos
+  setInterval(checkOllamaStatus, 30000);
+
+  // Cargar marcas en background para el badge
+  fetch(apiUrl('/brands'))
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      state.brands = data.brands || [];
+      document.getElementById('brandsBadge').textContent = state.brands.length;
+      document.getElementById('statBrands').textContent = state.brands.length;
+      var complete = state.brands.filter(function(b) { return b.onboarding_status === 'complete'; }).length;
+      document.getElementById('statADN').textContent = complete;
+    })
+    .catch(function() {});
+}
+
+init();
+</script>
+</body>
+</html>

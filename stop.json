@@ -1,0 +1,10 @@
+{
+  "run": [
+    {
+      "method": "shell.run",
+      "params": {
+        "message": "kill $(lsof -t -i:{{port}}) 2>/dev/null || true"
+      }
+    }
+  ]
+}
