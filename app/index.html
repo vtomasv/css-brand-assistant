@@ -1567,6 +1567,22 @@ function finishInterview() {
         // Deshabilitar input
         if (input) { input.disabled = true; input.placeholder = 'Entrevista finalizada. Inicia una nueva si lo necesitas.'; }
         if (sendBtn) { sendBtn.disabled = true; }
+        // Actualizar estado de la marca en memoria y en la UI
+        if (state.activeBrand) {
+          state.activeBrand.onboarding_status = 'complete';
+          // Actualizar también en el array de marcas
+          for (var i = 0; i < state.brands.length; i++) {
+            if (state.brands[i].id === state.activeBrand.id) {
+              state.brands[i].onboarding_status = 'complete';
+              break;
+            }
+          }
+          // Refrescar la lista de marcas en la UI si está visible
+          var brandsContent = document.getElementById('brandsContent');
+          if (brandsContent && brandsContent.innerHTML !== '') {
+            loadBrands();
+          }
+        }
       } else {
         addChatMessage('system-msg', 'Estado: ' + (data.message || data.status));
         showNotification(data.message || 'Entrevista finalizada', 'info');
@@ -2052,19 +2068,33 @@ function generateWithAI(pubId) {
       .then(function(data) {
         if (btn) { btn.disabled = false; btn.innerHTML = 'Generar con IA'; }
         if (data.image_url) {
-          // Construir URL absoluta con cache-busting para que el browser no use cache
-          var absUrl = window.location.origin + data.image_url;
-          // Actualizar preview dentro del modal (el contenedor tiene id fijo)
+          // Construir URL absoluta con cache-busting
+          // data.image_url ya tiene ?t=timestamp, agregar uno nuevo por si acaso
+          var ts = Date.now();
+          var imgPath = data.image_url.split('?')[0];  // /api/images/pub_id.png
+          var absUrl = window.location.origin + imgPath + '?t=' + ts;
+          // Actualizar preview dentro del modal
           var container = document.getElementById('pubPreviewImageContainer');
           if (container) {
-            container.innerHTML = '<img src="' + absUrl + '" style="width:100%;height:100%;object-fit:cover;border-radius:8px" onerror="this.parentNode.innerHTML=\'<span style=\'color:var(--danger)\'>Error al cargar imagen</span>\'" />';
+            var img = document.createElement('img');
+            img.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:8px';
+            img.onerror = function() {
+              container.innerHTML = '<span style="color:#ef4444">Error al cargar imagen</span>';
+            };
+            img.onload = function() {
+              showNotification('Imagen generada correctamente', 'success');
+            };
+            img.src = absUrl;
+            container.innerHTML = '';
+            container.appendChild(img);
           }
           // Actualizar también la miniatura en el calendario si está visible
           var calImg = document.querySelector('[data-pub-id="' + pubId + '"] .pub-cal-image');
           if (calImg) { calImg.src = absUrl; }
-          showNotification('Imagen generada correctamente', 'success');
+          showNotification('Imagen generada. Cargando preview...', 'info');
         } else {
-          showNotification(data.error || 'No se pudo generar la imagen', 'error');
+          showNotification((data.error || 'No se pudo generar la imagen'), 'error');
+          if (data.debug) { console.warn('Image gen debug:', data.debug); }
         }
       })
       .catch(function(e) {

@@ -760,24 +760,68 @@ async def finish_interview(brand_id: str, session_id: Optional[str] = None):
 
         parsed = _parse_llm_json(result)
         if parsed:
-            # Actualizar ADN con los nuevos insights
+            # Normalizar nombres de campo: el LLM puede devolver nombres en inglés
+            # que deben mapearse a los campos canónicos usados en la UI
+            FIELD_ALIASES = {
+                # Inglés → canónico
+                "value_proposition": "value_proposition",
+                "sector": "sector",
+                "tone": "tone",
+                "personality_traits": "personality_traits",
+                "color_palette": "color_palette",
+                "typography": "typography",
+                "visual_style": "visual_style",
+                "products_services": "products_services",
+                "brand_promises": "brand_promises",
+                "target_audience": "target_audience",
+                "formality_level": "formality_level",
+                "differentiators": "differentiators",
+                "content_themes": "content_themes",
+                # Español → canónico
+                "propuesta_de_valor": "value_proposition",
+                "propuesta_valor": "value_proposition",
+                "tono": "tone",
+                "tono_comunicacional": "tone",
+                "personalidad": "personality_traits",
+                "personalidad_de_marca": "personality_traits",
+                "rasgos_personalidad": "personality_traits",
+                "paleta_colores": "color_palette",
+                "paleta_de_colores": "color_palette",
+                "tipografia": "typography",
+                "estilo_visual": "visual_style",
+                "productos_servicios": "products_services",
+                "productos": "products_services",
+                "promesas": "brand_promises",
+                "promesas_de_marca": "brand_promises",
+                "publico_objetivo": "target_audience",
+                "audiencia": "target_audience",
+                "nivel_formalidad": "formality_level",
+                "diferenciadores": "differentiators",
+                "temas_contenido": "content_themes",
+                "temas_de_contenido": "content_themes",
+            }
+
             current_fields = adn_draft.get("fields", {})
-            for key, value in parsed.items():
-                if value:  # Solo actualizar campos con contenido
-                    current_fields[key] = value
+            for raw_key, value in parsed.items():
+                if not value:
+                    continue
+                # Normalizar clave
+                canonical = FIELD_ALIASES.get(raw_key.lower(), raw_key.lower())
+                current_fields[canonical] = value
 
             adn_draft["fields"] = current_fields
             adn_draft["updated_at"] = datetime.utcnow().isoformat()
             adn_draft["interview_session_id"] = session_id
             save_json(DATA_DIR / "brands" / brand_id / "adn_draft.json", adn_draft)
 
-            # Actualizar estado de la marca
-            brand["onboarding_status"] = "interviewing"
+            # Actualizar estado de la marca a 'complete' (entrevista finalizada)
+            brand["onboarding_status"] = "complete"
             brand["updated_at"] = datetime.utcnow().isoformat()
             save_json(brand_file, brand)
 
             log_audit("brand_analyzer", "finish_interview",
-                      {"brand_id": brand_id, "session_id": session_id, "messages": len(session_messages)},
+                      {"brand_id": brand_id, "session_id": session_id, "messages": len(session_messages),
+                       "fields_updated": list(current_fields.keys())},
                       result[:500], model, latency, True)
 
             return {
@@ -785,11 +829,24 @@ async def finish_interview(brand_id: str, session_id: Optional[str] = None):
                 "message": "Entrevista finalizada. El ADN ha sido actualizado con los insights recopilados.",
                 "adn_updated": True,
                 "message_count": len(session_messages),
+                "fields_updated": len(current_fields),
             }
         else:
+            # Aunque no se parseó JSON, guardar el texto crudo en raw_analysis
+            current_fields = adn_draft.get("fields", {})
+            current_fields["raw_analysis"] = result[:3000]
+            adn_draft["fields"] = current_fields
+            adn_draft["updated_at"] = datetime.utcnow().isoformat()
+            save_json(DATA_DIR / "brands" / brand_id / "adn_draft.json", adn_draft)
+
+            # Cambiar estado a complete de todas formas
+            brand["onboarding_status"] = "complete"
+            brand["updated_at"] = datetime.utcnow().isoformat()
+            save_json(brand_file, brand)
+
             return {
                 "status": "finished",
-                "message": "Entrevista finalizada. No se pudieron extraer insights adicionales del transcript.",
+                "message": "Entrevista finalizada. El análisis se guardó como texto sin estructurar.",
                 "adn_updated": False,
                 "message_count": len(session_messages),
             }
@@ -1273,16 +1330,33 @@ async def generate_publication_image(campaign_id: str, pub_id: str, req: Generat
         response.raise_for_status()
         data = response.json()
 
+        # Log de debug para entender qué devuelve el modelo
+        logger.info(f"Ollama image response keys: {list(data.keys())}")
+        if "images" in data:
+            logger.info(f"images field count: {len(data['images'])}, first len: {len(data['images'][0]) if data['images'] else 0}")
+        if "response" in data:
+            resp_preview = data["response"][:200] if data["response"] else ""
+            logger.info(f"response field preview: {repr(resp_preview)}")
+
         # 4. Extraer imagen base64 (campo 'images' o 'response')
         image_b64 = None
+
+        # Prioridad 1: campo 'images' (lista de base64)
         if "images" in data and data["images"]:
             image_b64 = data["images"][0]
+            logger.info(f"Imagen encontrada en campo 'images', longitud base64: {len(image_b64)}")
+
+        # Prioridad 2: campo 'response' que contenga base64 puro
         elif "response" in data and data["response"]:
-            # Algunos modelos de imagen devuelven base64 directamente en 'response'
             candidate = data["response"].strip()
-            # Verificar si parece base64 (no texto normal)
-            if len(candidate) > 100 and not candidate.startswith('{'):
-                image_b64 = candidate
+            # Detectar base64: solo caracteres A-Za-z0-9+/= y longitud mínima de 1000 chars
+            import re as _re
+            is_base64 = bool(_re.match(r'^[A-Za-z0-9+/=\s]{1000,}$', candidate))
+            if is_base64:
+                image_b64 = candidate.replace('\n', '').replace('\r', '').replace(' ', '')
+                logger.info(f"Imagen encontrada en campo 'response' (base64), longitud: {len(image_b64)}")
+            else:
+                logger.warning(f"Campo 'response' no es base64 válido. Primeros 200 chars: {repr(candidate[:200])}")
 
         if image_b64:
             # 5. Guardar imagen en disco con timestamp para evitar caché
@@ -1291,8 +1365,14 @@ async def generate_publication_image(campaign_id: str, pub_id: str, req: Generat
             ts = int(time.time())
             img_filename = f"{pub_id}_{ts}.png"
             img_path = img_dir / img_filename
-            img_bytes = base64.b64decode(image_b64)
-            img_path.write_bytes(img_bytes)
+
+            try:
+                img_bytes = base64.b64decode(image_b64, validate=False)
+                img_path.write_bytes(img_bytes)
+                logger.info(f"Imagen guardada: {img_path} ({len(img_bytes)} bytes)")
+            except Exception as decode_err:
+                logger.error(f"Error decodificando base64: {decode_err}")
+                return {"error": f"Error decodificando imagen: {str(decode_err)}", "success": False}
 
             # También guardar como nombre fijo (para referencia persistente)
             fixed_path = img_dir / f"{pub_id}.png"
@@ -1314,16 +1394,29 @@ async def generate_publication_image(campaign_id: str, pub_id: str, req: Generat
             latency = int((time.time() - start) * 1000)
             log_audit("image_generator", "generate_image",
                       {"campaign_id": campaign_id, "pub_id": pub_id, "model": req.model},
-                      f"Image generated: {img_filename}", req.model, latency, True)
+                      f"Image generated: {img_filename} ({len(img_bytes)} bytes)", req.model, latency, True)
 
-            return {"image_url": image_url, "success": True}
+            return {
+                "image_url": image_url,
+                "image_filename": img_filename,
+                "image_size_bytes": len(img_bytes),
+                "success": True,
+            }
         else:
+            # El modelo respondió pero sin imagen — devolver debug info
+            debug_info = {
+                "response_keys": list(data.keys()),
+                "response_preview": data.get("response", "")[:300] if data.get("response") else None,
+                "images_count": len(data.get("images", [])),
+            }
+            logger.error(f"Modelo {req.model} no retornó imagen. Debug: {debug_info}")
             return {
                 "error": (
-                    f"El modelo {req.model} no retornó una imagen. "
+                    f"El modelo {req.model} no retornó una imagen válida. "
                     "Este modelo puede no soportar generación de imágenes vía Ollama. "
                     "Verifica que sea un modelo de imagen compatible (ej: x/z-image-turbo, x/flux2-klein)."
                 ),
+                "debug": debug_info,
                 "success": False,
             }
 
@@ -1336,11 +1429,41 @@ async def generate_publication_image(campaign_id: str, pub_id: str, req: Generat
 
 @app.get("/api/images/{filename}")
 def serve_generated_image(filename: str):
-    """Sirve imágenes generadas por IA."""
-    img_path = DATA_DIR / "exports" / "images" / filename
+    """Sirve imágenes generadas por IA con headers anti-caché."""
+    # Soportar filename con query string (ej: pub_id.png?t=123)
+    clean_filename = filename.split("?")[0]
+    img_path = DATA_DIR / "exports" / "images" / clean_filename
     if not img_path.exists():
-        raise HTTPException(status_code=404, detail="Imagen no encontrada")
-    return FileResponse(str(img_path), media_type="image/png")
+        logger.warning(f"Imagen no encontrada: {img_path}")
+        raise HTTPException(status_code=404, detail=f"Imagen no encontrada: {clean_filename}")
+    return FileResponse(
+        str(img_path),
+        media_type="image/png",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )
+
+
+@app.get("/api/images")
+def list_generated_images():
+    """Lista todas las imágenes generadas (para debug)."""
+    img_dir = DATA_DIR / "exports" / "images"
+    if not img_dir.exists():
+        return {"images": []}
+    images = [
+        {
+            "filename": f.name,
+            "url": f"/api/images/{f.name}",
+            "size_kb": round(f.stat().st_size / 1024, 1),
+            "created_at": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
+        }
+        for f in sorted(img_dir.glob("*.png"), key=lambda x: x.stat().st_mtime, reverse=True)
+    ]
+    return {"images": images, "count": len(images)}
 
 
 def _parse_llm_json(text: str) -> Optional[dict]:
