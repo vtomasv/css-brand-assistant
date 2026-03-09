@@ -16,7 +16,8 @@
     {
       "method": "shell.run",
       "params": {
-        "message": "{{platform === 'win32' ? 'powershell -Command \"$ollamaPath = (Get-Command ollama -ErrorAction SilentlyContinue).Source; if (-not $ollamaPath) { $ollamaPath = \\\"$env:LOCALAPPDATA\\\\Programs\\\\Ollama\\\\ollama.exe\\\" }; if (Test-Path $ollamaPath) { Write-Host OLLAMA_ALREADY_INSTALLED } else { Write-Host Descargando instalador de Ollama...; $installer = \\\"$env:TEMP\\\\OllamaSetup.exe\\\"; Invoke-WebRequest -Uri https://ollama.com/download/OllamaSetup.exe -OutFile $installer; Write-Host Instalando Ollama silenciosamente...; Start-Process -FilePath $installer -ArgumentList /S -Wait; Write-Host OLLAMA_INSTALLED }\"' : 'which ollama && echo OLLAMA_ALREADY_INSTALLED || (curl -fsSL https://ollama.com/install.sh | sh && echo OLLAMA_INSTALLED)'}}"
+        "message": "{{platform === 'win32' ? 'powershell -ExecutionPolicy Bypass -File scripts\\\\install_ollama.ps1' : 'which ollama && echo OLLAMA_ALREADY_INSTALLED || (curl -fsSL https://ollama.com/install.sh | sh && echo OLLAMA_INSTALLED)'}}",
+        "path": "{{cwd}}"
       }
     },
 
@@ -29,13 +30,8 @@
     {
       "method": "shell.run",
       "params": {
-        "message": "{{platform === 'win32' ? 'powershell -WindowStyle Hidden -Command \"$ollamaPath = (Get-Command ollama -ErrorAction SilentlyContinue).Source; if (-not $ollamaPath) { $ollamaPath = \\\"$env:LOCALAPPDATA\\\\Programs\\\\Ollama\\\\ollama.exe\\\" }; if (Test-Path $ollamaPath) { Start-Process -FilePath $ollamaPath -ArgumentList serve -WindowStyle Hidden | Out-Null; Write-Host OLLAMA_STARTED } else { Write-Host OLLAMA_NOT_FOUND }\"' : 'ollama serve > /dev/null 2>&1 &'}}"
-      }
-    },
-    {
-      "method": "shell.run",
-      "params": {
-        "message": "{{platform === 'win32' ? 'powershell -Command \"Start-Sleep -Seconds 5\"' : 'sleep 5'}}"
+        "message": "{{platform === 'win32' ? 'powershell -ExecutionPolicy Bypass -File scripts\\\\start_ollama.ps1' : 'ollama serve > /dev/null 2>&1 & sleep 5'}}",
+        "path": "{{cwd}}"
       }
     },
 
@@ -89,14 +85,21 @@
     {
       "method": "shell.run",
       "params": {
-        "message": "{{platform === 'win32' ? 'powershell -Command \"@(\\\"data/agents\\\",\\\"data/prompts/system\\\",\\\"data/sessions\\\",\\\"data/exports\\\",\\\"data/brands\\\",\\\"data/campaigns\\\",\\\"data/audit\\\") | ForEach-Object { New-Item -ItemType Directory -Force -Path $_ | Out-Null }; Write-Host DIRS_OK\"' : 'mkdir -p data/agents data/prompts/system data/sessions data/exports data/brands data/campaigns data/audit'}}",
+        "message": "{{platform === 'win32' ? 'powershell -ExecutionPolicy Bypass -Command \"@(\\\"data/agents\\\",\\\"data/prompts/system\\\",\\\"data/sessions\\\",\\\"data/exports\\\",\\\"data/brands\\\",\\\"data/campaigns\\\",\\\"data/audit\\\") | ForEach-Object { New-Item -ItemType Directory -Force -Path $_ | Out-Null }; Write-Host DIRS_OK\"' : 'mkdir -p data/agents data/prompts/system data/sessions data/exports data/brands data/campaigns data/audit'}}",
         "path": "{{cwd}}"
       }
     },
     {
       "method": "shell.run",
       "params": {
-        "message": "{{platform === 'win32' ? 'powershell -Command \"if (-not (Test-Path data/agents/agents.json)) { Copy-Item defaults/agents.json data/agents/agents.json }; Get-ChildItem defaults/prompts/*.md | ForEach-Object { $dest = \\\"data/prompts/system/$($_.Name)\\\"; if (-not (Test-Path $dest)) { Copy-Item $_.FullName $dest } }; Write-Host DEFAULTS_OK\"' : 'cp defaults/agents.json data/agents/agents.json 2>/dev/null || true; cp defaults/prompts/*.md data/prompts/system/ 2>/dev/null || true'}}",
+        "message": "{{platform === 'win32' ? 'if not exist data\\\\agents\\\\agents.json copy defaults\\\\agents.json data\\\\agents\\\\agents.json' : 'cp defaults/agents.json data/agents/agents.json 2>/dev/null || true'}}",
+        "path": "{{cwd}}"
+      }
+    },
+    {
+      "method": "shell.run",
+      "params": {
+        "message": "{{platform === 'win32' ? 'for %f in (defaults\\\\prompts\\\\*.md) do if not exist data\\\\prompts\\\\system\\\\%~nxf copy \"%f\" data\\\\prompts\\\\system\\\\' : 'cp defaults/prompts/*.md data/prompts/system/ 2>/dev/null || true'}}",
         "path": "{{cwd}}"
       }
     },

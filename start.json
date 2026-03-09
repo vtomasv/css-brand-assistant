@@ -10,14 +10,7 @@
     {
       "method": "shell.run",
       "params": {
-        "message": "{{platform === 'win32' ? 'powershell -WindowStyle Hidden -Command \"$ollamaPath = (Get-Command ollama -ErrorAction SilentlyContinue).Source; if (-not $ollamaPath) { $ollamaPath = \\\"$env:LOCALAPPDATA\\\\Programs\\\\Ollama\\\\ollama.exe\\\" }; if (Test-Path $ollamaPath) { Start-Process -FilePath $ollamaPath -ArgumentList serve -WindowStyle Hidden -PassThru | Out-Null; Write-Host OLLAMA_STARTED } else { Write-Host OLLAMA_NOT_FOUND }\"' : 'ollama serve > /dev/null 2>&1 &'}}",
-        "path": "{{cwd}}"
-      }
-    },
-    {
-      "method": "shell.run",
-      "params": {
-        "message": "{{platform === 'win32' ? 'powershell -Command \"Start-Sleep -Seconds 4\"' : 'sleep 4'}}",
+        "message": "{{platform === 'win32' ? 'powershell -ExecutionPolicy Bypass -File scripts\\\\start_ollama.ps1' : 'ollama serve > /dev/null 2>&1 & sleep 4'}}",
         "path": "{{cwd}}"
       }
     },
