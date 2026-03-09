@@ -652,6 +652,32 @@
         </div>
       </div>
 
+      <div class="grid-2" style="margin-bottom:20px">
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">Campañas recientes</div>
+              <div class="card-subtitle">Acceso rápido a tus campañas activas</div>
+            </div>
+            <button class="btn btn-sm btn-primary" onclick="navigateTo('campaigns')">Ver todas</button>
+          </div>
+          <div id="dashRecentCampaigns">
+            <div style="color:var(--text-muted);font-size:13px;padding:12px 0">Cargando campañas...</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">Publicaciones por canal</div>
+              <div class="card-subtitle">Distribución de contenido</div>
+            </div>
+          </div>
+          <div id="dashChannelStats">
+            <div style="color:var(--text-muted);font-size:13px;padding:12px 0">Cargando estadísticas...</div>
+          </div>
+        </div>
+      </div>
+
       <div class="grid-2">
         <div class="card">
           <div class="card-header">
@@ -1108,15 +1134,104 @@ function loadDashboard() {
 }
 
 function loadDashboardStats() {
-  fetch(apiUrl('/brands'))
+  fetch(apiUrl('/stats'))
     .then(function(r) { return r.json(); })
     .then(function(data) {
-      var brands = data.brands || [];
-      document.getElementById('statBrands').textContent = brands.length;
-      var complete = brands.filter(function(b) { return b.onboarding_status === 'complete'; }).length;
-      document.getElementById('statADN').textContent = complete;
+      document.getElementById('statBrands').textContent = data.brands || 0;
+      document.getElementById('statADN').textContent = data.adn_complete || 0;
+      document.getElementById('statCampaigns').textContent = data.campaigns || 0;
+      document.getElementById('statPublications').textContent = data.publications || 0;
+
+      // Actualizar subtextos con desglose
+      var pubStatus = data.pub_by_status || {};
+      var pubEl = document.getElementById('statPublications');
+      if (pubEl && pubEl.parentNode) {
+        var sub = pubEl.parentNode.querySelector('.stat-sub');
+        if (sub) {
+          var published = pubStatus.published || 0;
+          var pending = pubStatus.pending || 0;
+          sub.textContent = published + ' publicadas, ' + pending + ' pendientes';
+        }
+      }
+
+      // Mostrar campañas recientes en el dashboard
+      var recentEl = document.getElementById('dashRecentCampaigns');
+      if (recentEl) {
+        if (data.recent_campaigns && data.recent_campaigns.length > 0) {
+          var html = '';
+          for (var i = 0; i < data.recent_campaigns.length; i++) {
+            var c = data.recent_campaigns[i];
+            html += '<div style="display:flex;align-items:center;gap:10px;padding:8px;background:var(--bg-base);border-radius:6px;margin-bottom:6px;cursor:pointer" onclick="selectCampaignFromDashboard(\'' + c.id + '\')">';
+            html += '<div style="width:8px;height:8px;border-radius:50%;background:var(--primary);flex-shrink:0"></div>';
+            html += '<div style="flex:1;min-width:0">';
+            html += '<div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(c.name || '') + '</div>';
+            html += '<div style="font-size:10px;color:var(--text-muted)">' + (c.channels || []).join(' · ') + '</div>';
+            html += '</div>';
+            html += '<button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();selectCampaignFromDashboard(\'' + c.id + '\')">Ver</button>';
+            html += '</div>';
+          }
+          recentEl.innerHTML = html;
+        } else {
+          recentEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:12px 0">No hay campañas aún. <a href="#" onclick="navigateTo(\'campaigns\')">Crear primera campaña</a></div>';
+        }
+      }
+
+      // Mostrar distribución por canal
+      var channelEl = document.getElementById('dashChannelStats');
+      if (channelEl) {
+        var byChannel = data.pub_by_channel || {};
+        var channelKeys = Object.keys(byChannel);
+        var total = data.publications || 0;
+        if (channelKeys.length > 0 && total > 0) {
+          var channelColors = {Instagram: '#e1306c', LinkedIn: '#0077b5', WhatsApp: '#25d366', Facebook: '#1877f2', Twitter: '#1da1f2', TikTok: '#010101'};
+          var html = '<div style="display:flex;flex-direction:column;gap:8px">';
+          for (var ci = 0; ci < channelKeys.length; ci++) {
+            var ch = channelKeys[ci];
+            var cnt = byChannel[ch];
+            var pct = Math.round((cnt / total) * 100);
+            var color = channelColors[ch] || 'var(--primary)';
+            html += '<div>';
+            html += '<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">';
+            html += '<span>' + escapeHtml(ch) + '</span><span style="color:var(--text-muted)">' + cnt + ' (' + pct + '%)</span>';
+            html += '</div>';
+            html += '<div style="height:6px;background:var(--bg-base);border-radius:3px;overflow:hidden">';
+            html += '<div style="height:100%;width:' + pct + '%;background:' + color + ';border-radius:3px;transition:width 0.5s"></div>';
+            html += '</div></div>';
+          }
+          html += '</div>';
+          channelEl.innerHTML = html;
+        } else {
+          channelEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:12px 0">No hay publicaciones aún.</div>';
+        }
+      }
     })
-    .catch(function() {});
+    .catch(function() {
+      // Fallback: cargar solo marcas
+      fetch(apiUrl('/brands'))
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          var brands = data.brands || [];
+          document.getElementById('statBrands').textContent = brands.length;
+          var complete = brands.filter(function(b) { return b.onboarding_status === 'complete'; }).length;
+          document.getElementById('statADN').textContent = complete;
+        })
+        .catch(function() {});
+    });
+}
+
+function selectCampaignFromDashboard(campaignId) {
+  // Buscar la campaña en state.campaigns o cargarla
+  var found = null;
+  for (var i = 0; i < state.campaigns.length; i++) {
+    if (state.campaigns[i].id === campaignId) { found = state.campaigns[i]; break; }
+  }
+  if (found) {
+    state.activeCampaign = found;
+    navigateTo('calendar');
+  } else {
+    // Buscar en todas las marcas
+    navigateTo('campaigns');
+  }
 }
 
 function checkOllamaStatus() {
@@ -1772,6 +1887,9 @@ function pollCampaignStatus(campaignId) {
 // ============================================================
 // CALENDARIO
 // ============================================================
+// Estado del calendario
+var calState = { year: 0, month: 0, allPubs: [], channelFilter: '', selectedDate: null };
+
 function loadCalendar() {
   var content = document.getElementById('calendarContent');
   if (!state.activeCampaign) {
@@ -1788,45 +1906,219 @@ function loadCalendar() {
   fetch(apiUrl('/campaigns/' + state.activeCampaign.id + '/publications'))
     .then(function(r) { return r.json(); })
     .then(function(data) {
-      renderCalendar(data.publications || []);
+      var pubs = data.publications || [];
+      calState.allPubs = pubs;
+      calState.channelFilter = '';
+      calState.selectedDate = null;
+      // Iniciar en el mes de la primera publicación o mes actual
+      var now = new Date();
+      if (pubs.length > 0 && pubs[0].scheduled_at) {
+        var firstDate = new Date(pubs[0].scheduled_at.split(' ')[0]);
+        calState.year = firstDate.getFullYear();
+        calState.month = firstDate.getMonth();
+      } else {
+        calState.year = now.getFullYear();
+        calState.month = now.getMonth();
+      }
+      renderCalendar();
     })
     .catch(function(e) {
       content.innerHTML = '<div class="empty-state"><div class="empty-title">Error</div><div class="empty-desc">' + e.message + '</div></div>';
     });
 }
 
-function renderCalendar(publications) {
+function renderCalendar() {
   var content = document.getElementById('calendarContent');
   var camp = state.activeCampaign;
+  var year = calState.year;
+  var month = calState.month;
+  var pubs = calState.allPubs;
+  var filter = calState.channelFilter;
 
-  // Agrupar publicaciones por fecha
+  // Filtrar publicaciones por canal si hay filtro
+  var filteredPubs = filter ? pubs.filter(function(p) { return p.channel === filter; }) : pubs;
+
+  // Agrupar por fecha (YYYY-MM-DD)
   var byDate = {};
-  for (var i = 0; i < publications.length; i++) {
-    var pub = publications[i];
+  for (var i = 0; i < filteredPubs.length; i++) {
+    var pub = filteredPubs[i];
     var date = (pub.scheduled_at || '').split(' ')[0];
     if (!byDate[date]) byDate[date] = [];
     byDate[date].push(pub);
   }
 
-  var html = '<div class="card" style="margin-bottom:16px">';
-  html += '<div class="card-header"><div><div class="card-title">Campaña: ' + escapeHtml(camp.name) + '</div>';
-  html += '<div class="card-subtitle">' + formatDate(camp.start_date) + ' al ' + formatDate(camp.end_date) + ' &bull; ' + publications.length + ' publicaciones</div></div>';
-  html += '<div style="display:flex;gap:8px">';
-  html += '<select id="calendarChannelFilter" onchange="filterCalendar()" style="width:auto;padding:6px 10px;font-size:12px"><option value="">Todos los canales</option>';
+  var monthNames = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  var dayNames = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+  var channelColors = {Instagram: '#e1306c', LinkedIn: '#0077b5', WhatsApp: '#25d366', Facebook: '#1877f2', Twitter: '#1da1f2', TikTok: '#010101'};
+
+  // Calcular primer día del mes y total de días
+  var firstDay = new Date(year, month, 1).getDay(); // 0=Dom
+  var daysInMonth = new Date(year, month + 1, 0).getDate();
+
+  // Canales disponibles
   var channels = camp.channels || [];
-  for (var j = 0; j < channels.length; j++) {
-    html += '<option value="' + channels[j] + '">' + channels[j] + '</option>';
+  var allChannels = [];
+  for (var ci = 0; ci < pubs.length; ci++) {
+    if (pubs[ci].channel && allChannels.indexOf(pubs[ci].channel) === -1) allChannels.push(pubs[ci].channel);
   }
-  html += '</select></div></div>';
 
-  // Vista de lista de publicaciones
-  html += '<div id="calendarPublicationsList">';
-  html += renderPublicationsList(publications);
-  html += '</div>';
+  var html = '<div class="card" style="margin-bottom:16px">';
+  // Cabecera de la campaña
+  html += '<div class="card-header" style="flex-wrap:wrap;gap:8px">';
+  html += '<div><div class="card-title">Campaña: ' + escapeHtml(camp.name) + '</div>';
+  html += '<div class="card-subtitle">' + formatDate(camp.start_date) + ' al ' + formatDate(camp.end_date) + ' &bull; ' + filteredPubs.length + ' publicaciones</div></div>';
+  html += '<div style="display:flex;gap:8px;align-items:center">';
+  html += '<select id="calendarChannelFilter" onchange="calChangeFilter(this.value)" style="width:auto;padding:6px 10px;font-size:12px"><option value="">Todos los canales</option>';
+  for (var j = 0; j < allChannels.length; j++) {
+    html += '<option value="' + allChannels[j] + '"' + (filter === allChannels[j] ? ' selected' : '') + '>' + allChannels[j] + '</option>';
+  }
+  html += '</select>';
+  html += '<button class="btn btn-sm btn-secondary" onclick="calChangeView(\'list\')">&#9776; Lista</button>';
+  html += '<button class="btn btn-sm btn-primary" onclick="calChangeView(\'month\')">&#9632; Mes</button>';
+  html += '</div></div>';
+
+  // Navegación de mes
+  html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border);margin-bottom:16px">';
+  html += '<button class="btn btn-sm btn-secondary" onclick="calPrevMonth()">&#8592; Anterior</button>';
+  html += '<div style="font-size:16px;font-weight:700">' + monthNames[month] + ' ' + year + '</div>';
+  html += '<button class="btn btn-sm btn-secondary" onclick="calNextMonth()">Siguiente &#8594;</button>';
   html += '</div>';
 
+  // Leyenda de canales
+  if (allChannels.length > 0) {
+    html += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px">';
+    for (var li = 0; li < allChannels.length; li++) {
+      var lc = allChannels[li];
+      var lcol = channelColors[lc] || 'var(--primary)';
+      html += '<div style="display:flex;align-items:center;gap:4px;font-size:11px">';
+      html += '<div style="width:10px;height:10px;border-radius:50%;background:' + lcol + '"></div>';
+      html += '<span>' + escapeHtml(lc) + '</span></div>';
+    }
+    html += '</div>';
+  }
+
+  // Grid del calendario
+  html += '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-bottom:16px">';
+  // Cabecera de días
+  for (var d = 0; d < 7; d++) {
+    html += '<div style="text-align:center;font-size:11px;font-weight:700;color:var(--text-muted);padding:6px 0">' + dayNames[d] + '</div>';
+  }
+  // Celdas vacías antes del primer día
+  for (var e = 0; e < firstDay; e++) {
+    html += '<div style="min-height:80px"></div>';
+  }
+  // Días del mes
+  for (var day = 1; day <= daysInMonth; day++) {
+    var dateStr = year + '-' + String(month + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+    var dayPubs = byDate[dateStr] || [];
+    var isToday = (new Date().toISOString().split('T')[0] === dateStr);
+    var isSelected = (calState.selectedDate === dateStr);
+    var hasPubs = dayPubs.length > 0;
+
+    var cellStyle = 'min-height:80px;padding:4px;border-radius:6px;border:1px solid ' + (isSelected ? 'var(--primary)' : (hasPubs ? 'var(--border)' : 'transparent')) + ';background:' + (isSelected ? 'rgba(99,102,241,0.15)' : (hasPubs ? 'var(--bg-card)' : 'transparent')) + ';cursor:' + (hasPubs ? 'pointer' : 'default') + ';transition:all 0.15s;position:relative';
+
+    html += '<div style="' + cellStyle + '"' + (hasPubs ? ' onclick="calSelectDate(\'' + dateStr + '\')"' : '') + '>';
+    html += '<div style="font-size:12px;font-weight:' + (isToday ? '800' : '600') + ';color:' + (isToday ? 'var(--primary)' : 'var(--text-main)') + ';margin-bottom:4px">' + day + '</div>';
+
+    // Mostrar puntos de publicaciones por canal (máx 4 visibles)
+    var shown = Math.min(dayPubs.length, 4);
+    for (var pi = 0; pi < shown; pi++) {
+      var pc = dayPubs[pi].channel || '';
+      var pcol = channelColors[pc] || 'var(--primary)';
+      html += '<div style="font-size:10px;padding:1px 4px;border-radius:3px;background:' + pcol + '20;color:' + pcol + ';overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:2px">' + escapeHtml(pc) + '</div>';
+    }
+    if (dayPubs.length > 4) {
+      html += '<div style="font-size:10px;color:var(--text-muted)">+' + (dayPubs.length - 4) + ' más</div>';
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+
+  // Panel de publicaciones del día seleccionado
+  html += '<div id="calDayPanel">';
+  if (calState.selectedDate) {
+    var selPubs = byDate[calState.selectedDate] || [];
+    html += renderCalDayPanel(calState.selectedDate, selPubs);
+  }
+  html += '</div>';
+
+  html += '</div>'; // /card
   content.innerHTML = html;
-  content.setAttribute('data-publications', JSON.stringify(publications));
+  content.setAttribute('data-publications', JSON.stringify(filteredPubs));
+}
+
+function renderCalDayPanel(dateStr, pubs) {
+  if (pubs.length === 0) return '';
+  var channelColors = {Instagram: '#e1306c', LinkedIn: '#0077b5', WhatsApp: '#25d366', Facebook: '#1877f2', Twitter: '#1da1f2', TikTok: '#010101'};
+  var html = '<div style="border-top:1px solid var(--border);padding-top:16px">';
+  html += '<div style="font-size:14px;font-weight:700;margin-bottom:12px">Publicaciones del ' + dateStr + ' (' + pubs.length + ')</div>';
+  html += '<div style="display:flex;flex-direction:column;gap:8px">';
+  for (var i = 0; i < pubs.length; i++) {
+    var pub = pubs[i];
+    var pc = pub.channel || '';
+    var pcol = (channelColors[pc] || 'var(--primary)');
+    html += '<div style="display:flex;align-items:flex-start;gap:12px;padding:12px;background:var(--bg-base);border:1px solid var(--border);border-left:3px solid ' + pcol + ';border-radius:8px;cursor:pointer" onclick="openPubEditor(\'' + pub.id + '\')">';
+    html += '<div style="flex:1;min-width:0">';
+    html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">';
+    html += '<span style="font-size:11px;font-weight:700;color:' + pcol + '">' + escapeHtml(pc) + '</span>';
+    html += '<span style="font-size:11px;color:var(--text-muted)">' + escapeHtml(pub.stage || '') + '</span>';
+    html += '<span class="brand-status ' + getPubStatusClass(pub.status) + '" style="margin-left:auto">' + getPubStatusLabel(pub.status) + '</span>';
+    html += '</div>';
+    html += '<div style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml((pub.text || '').substring(0, 140)) + '</div>';
+    if (pub.hashtags && pub.hashtags.length > 0) {
+      html += '<div style="font-size:11px;color:var(--primary);margin-top:4px">' + pub.hashtags.slice(0, 4).join(' ') + '</div>';
+    }
+    html += '</div>';
+    html += '<button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();openPubEditor(\'' + pub.id + '\')" style="flex-shrink:0">Editar</button>';
+    html += '</div>';
+  }
+  html += '</div></div>';
+  return html;
+}
+
+function calSelectDate(dateStr) {
+  calState.selectedDate = (calState.selectedDate === dateStr) ? null : dateStr;
+  renderCalendar();
+}
+
+function calPrevMonth() {
+  calState.month--;
+  if (calState.month < 0) { calState.month = 11; calState.year--; }
+  calState.selectedDate = null;
+  renderCalendar();
+}
+
+function calNextMonth() {
+  calState.month++;
+  if (calState.month > 11) { calState.month = 0; calState.year++; }
+  calState.selectedDate = null;
+  renderCalendar();
+}
+
+function calChangeFilter(val) {
+  calState.channelFilter = val;
+  calState.selectedDate = null;
+  renderCalendar();
+}
+
+function calChangeView(view) {
+  if (view === 'list') {
+    var content = document.getElementById('calendarContent');
+    var camp = state.activeCampaign;
+    var pubs = calState.allPubs;
+    var filter = calState.channelFilter;
+    var filtered = filter ? pubs.filter(function(p) { return p.channel === filter; }) : pubs;
+    var html = '<div class="card">';
+    html += '<div class="card-header"><div><div class="card-title">Campaña: ' + escapeHtml(camp.name) + '</div>';
+    html += '<div class="card-subtitle">' + filtered.length + ' publicaciones</div></div>';
+    html += '<button class="btn btn-sm btn-primary" onclick="renderCalendar()">&#9632; Mes</button>';
+    html += '</div>';
+    html += renderPublicationsList(filtered);
+    html += '</div>';
+    content.innerHTML = html;
+  } else {
+    renderCalendar();
+  }
 }
 
 function renderPublicationsList(publications) {
@@ -2172,50 +2464,125 @@ function loadAgents() {
 function renderAgents(agents) {
   var content = document.getElementById('agentsContent');
 
-  var html = '<div class="grid-2">';
+  var html = '<div style="display:flex;flex-direction:column;gap:20px">';
   for (var i = 0; i < agents.length; i++) {
     var a = agents[i];
-    html += '<div class="card">';
-    html += '<div class="card-header"><div><div class="card-title">' + escapeHtml(a.name) + '</div>';
-    html += '<div class="card-subtitle">' + escapeHtml(a.description) + '</div></div>';
-    html += '<span class="brand-status status-complete">' + escapeHtml(a.role) + '</span>';
-    html += '</div>';
-    html += '<div style="margin-bottom:12px">';
-    html += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">Modelo</div>';
-    html += '<span style="background:rgba(99,102,241,0.15);color:var(--primary);font-size:11px;padding:3px 8px;border-radius:20px">' + escapeHtml(a.model || '') + '</span>';
-    html += '</div>';
-    html += '<div style="margin-bottom:12px">';
-    html += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">Skills</div>';
+    var agentId = a.id;
     var skills = a.skills || [];
-    for (var j = 0; j < skills.length; j++) {
-      html += '<span style="background:rgba(6,182,212,0.1);color:var(--accent);font-size:10px;padding:2px 6px;border-radius:20px;margin-right:4px">' + escapeHtml(skills[j]) + '</span>';
+    var skillContents = a.skill_contents || {};
+
+    html += '<div class="card">';
+    // Cabecera del agente
+    html += '<div class="card-header" style="align-items:flex-start">';
+    html += '<div>';
+    html += '<div class="card-title" style="font-size:16px">' + escapeHtml(a.name) + '</div>';
+    html += '<div class="card-subtitle" style="margin-top:4px">' + escapeHtml(a.description || '') + '</div>';
+    html += '</div>';
+    html += '<span class="brand-status status-complete" style="flex-shrink:0">' + escapeHtml(a.role || '') + '</span>';
+    html += '</div>';
+
+    // Modelo y temperatura
+    html += '<div style="display:flex;gap:16px;margin-bottom:16px;flex-wrap:wrap">';
+    html += '<div>';
+    html += '<label>Modelo</label>';
+    html += '<input type="text" id="model_' + agentId + '" value="' + escapeHtml(a.model || '') + '" style="width:220px" />';
+    html += '</div>';
+    html += '<div>';
+    html += '<label>Temperatura</label>';
+    html += '<input type="number" id="temp_' + agentId + '" value="' + (a.temperature || 0.7) + '" min="0" max="2" step="0.1" style="width:80px" />';
+    html += '</div>';
+    html += '</div>';
+
+    // System Prompt
+    html += '<div style="margin-bottom:16px">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">';
+    html += '<label style="margin:0">System Prompt</label>';
+    html += '<button class="btn btn-sm btn-primary" onclick="saveAgentPrompt(\'' + agentId + '\')">Guardar prompt</button>';
+    html += '</div>';
+    html += '<textarea id="prompt_' + agentId + '" style="min-height:180px;font-size:12px;font-family:monospace;line-height:1.5">' + escapeHtml(a.system_prompt || '') + '</textarea>';
+    html += '</div>';
+
+    // Skills editables
+    if (skills.length > 0) {
+      html += '<div>';
+      html += '<label style="margin-bottom:8px;display:block">Skills (' + skills.length + ')</label>';
+      html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">';
+      for (var si = 0; si < skills.length; si++) {
+        var sname = skills[si];
+        html += '<button class="btn btn-sm" style="background:rgba(6,182,212,0.1);color:var(--accent);border:1px solid rgba(6,182,212,0.3)" onclick="toggleSkillEditor(\'' + agentId + '\',\'' + sname + '\')">&#9998; ' + escapeHtml(sname) + '</button>';
+      }
+      html += '</div>';
+
+      // Editores de skills (ocultos por defecto)
+      for (var sk = 0; sk < skills.length; sk++) {
+        var skillName = skills[sk];
+        var skillContent = skillContents[skillName] || '';
+        html += '<div id="skillEditor_' + agentId + '_' + skillName + '" style="display:none;margin-bottom:12px;padding:12px;background:var(--bg-base);border-radius:8px;border:1px solid var(--border)">';
+        html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
+        html += '<div style="font-size:12px;font-weight:700;color:var(--accent)">' + escapeHtml(skillName) + '.md</div>';
+        html += '<div style="display:flex;gap:6px">';
+        html += '<button class="btn btn-sm btn-primary" onclick="saveSkillContent(\'' + agentId + '\',\'' + skillName + '\')">Guardar skill</button>';
+        html += '<button class="btn btn-sm btn-secondary" onclick="toggleSkillEditor(\'' + agentId + '\',\'' + skillName + '\')" >Cerrar</button>';
+        html += '</div></div>';
+        if (skillContent) {
+          html += '<textarea id="skill_' + agentId + '_' + skillName + '" style="min-height:200px;font-size:11px;font-family:monospace;line-height:1.5">' + escapeHtml(skillContent) + '</textarea>';
+        } else {
+          html += '<div style="color:var(--text-muted);font-size:12px;padding:8px">Skill no encontrado en disco. Puedes escribir el contenido aqui para crearlo.</div>';
+          html += '<textarea id="skill_' + agentId + '_' + skillName + '" style="min-height:200px;font-size:11px;font-family:monospace;line-height:1.5" placeholder="Escribe el contenido del skill aqui..."></textarea>';
+        }
+        html += '</div>';
+      }
+      html += '</div>';
     }
-    html += '</div>';
-    html += '<div style="margin-bottom:12px">';
-    html += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">System Prompt</div>';
-    html += '<textarea id="prompt_' + a.id + '" style="min-height:80px;font-size:11px">' + escapeHtml(a.system_prompt || '') + '</textarea>';
-    html += '</div>';
-    html += '<div style="display:flex;gap:8px">';
-    html += '<button class="btn btn-sm btn-primary" onclick="saveAgentPrompt(\'' + a.id + '\')">Guardar prompt</button>';
-    html += '</div>';
-    html += '</div>';
+
+    html += '</div>'; // /card
   }
   html += '</div>';
   content.innerHTML = html;
 }
 
+function toggleSkillEditor(agentId, skillName) {
+  var el = document.getElementById('skillEditor_' + agentId + '_' + skillName);
+  if (!el) return;
+  el.style.display = (el.style.display === 'none' || el.style.display === '') ? 'block' : 'none';
+}
+
+function saveSkillContent(agentId, skillName) {
+  var el = document.getElementById('skill_' + agentId + '_' + skillName);
+  if (!el) return;
+  var content = el.value;
+  fetch(apiUrl('/agents/' + agentId + '/skills/' + skillName), {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({content: content}),
+  })
+    .then(function(r) { return r.json(); })
+    .then(function() {
+      showNotification('Skill "' + skillName + '" guardado correctamente', 'success');
+    })
+    .catch(function(e) {
+      showNotification('Error al guardar skill: ' + e.message, 'error');
+    });
+}
+
 function saveAgentPrompt(agentId) {
   var promptEl = document.getElementById('prompt_' + agentId);
+  var modelEl = document.getElementById('model_' + agentId);
+  var tempEl = document.getElementById('temp_' + agentId);
   if (!promptEl) return;
+
+  var payload = {agent_id: agentId, system_prompt: promptEl.value};
+  if (modelEl) payload.model = modelEl.value;
+  if (tempEl) payload.temperature = parseFloat(tempEl.value) || 0.7;
 
   fetch(apiUrl('/agents/' + agentId), {
     method: 'PUT',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({agent_id: agentId, system_prompt: promptEl.value}),
+    body: JSON.stringify(payload),
   })
     .then(function(r) { return r.json(); })
     .then(function() {
-      showNotification('Prompt del agente actualizado', 'success');
+      showNotification('Agente "' + agentId + '" actualizado correctamente', 'success');
     })
     .catch(function(e) {
       showNotification('Error: ' + e.message, 'error');

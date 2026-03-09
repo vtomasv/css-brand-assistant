@@ -1603,11 +1603,103 @@ FORMATO DE RESPUESTA (JSON):
 # ---------------------------------------------------------------------------
 # RUTAS: Agentes y Configuración
 # ---------------------------------------------------------------------------
+@app.get("/api/stats")
+def get_stats():
+    """Retorna estadísticas globales del sistema: marcas, ADN, campañas y publicaciones."""
+    brands_file = DATA_DIR / "brands.json"
+    brands_data = load_json(brands_file, {"brands": []})
+    brands = brands_data.get("brands", [])
+
+    total_brands = len(brands)
+    adn_complete = sum(1 for b in brands if b.get("onboarding_status") == "complete")
+
+    # Contar campañas y publicaciones recorriendo los directorios
+    total_campaigns = 0
+    total_publications = 0
+    pub_by_status = {"pending": 0, "ready": 0, "published": 0, "omitted": 0}
+    pub_by_channel = {}
+    recent_campaigns = []
+
+    campaigns_root = DATA_DIR / "campaigns"
+    if campaigns_root.exists():
+        for camp_dir in sorted(campaigns_root.iterdir(), key=lambda d: d.stat().st_mtime, reverse=True):
+            if not camp_dir.is_dir():
+                continue
+            camp_file = camp_dir / "campaign.json"
+            plan_file = camp_dir / "plan.json"
+            if not camp_file.exists():
+                continue
+            camp = load_json(camp_file, {})
+            total_campaigns += 1
+            if len(recent_campaigns) < 5:
+                recent_campaigns.append({
+                    "id": camp.get("id"),
+                    "name": camp.get("name"),
+                    "brand_id": camp.get("brand_id"),
+                    "start_date": camp.get("start_date"),
+                    "end_date": camp.get("end_date"),
+                    "channels": camp.get("channels", []),
+                })
+            if plan_file.exists():
+                plan = load_json(plan_file, {"publications": []})
+                pubs = plan.get("publications", [])
+                total_publications += len(pubs)
+                for pub in pubs:
+                    status = pub.get("status", "pending")
+                    pub_by_status[status] = pub_by_status.get(status, 0) + 1
+                    channel = pub.get("channel", "Otro")
+                    pub_by_channel[channel] = pub_by_channel.get(channel, 0) + 1
+
+    return {
+        "brands": total_brands,
+        "adn_complete": adn_complete,
+        "campaigns": total_campaigns,
+        "publications": total_publications,
+        "pub_by_status": pub_by_status,
+        "pub_by_channel": pub_by_channel,
+        "recent_campaigns": recent_campaigns,
+    }
+
+
 @app.get("/api/agents")
 def list_agents():
-    """Lista todos los agentes configurados."""
+    """Lista todos los agentes con su system_prompt real (desde disco) y contenido de skills."""
     agents_file = DATA_DIR / "agents" / "agents.json"
-    return load_json(agents_file, {"agents": []})
+    agents_data = load_json(agents_file, {"agents": []})
+
+    # Enriquecer cada agente con el prompt real desde disco y el contenido del skill file
+    for agent in agents_data.get("agents", []):
+        agent_id = agent.get("id", "")
+
+        # 1. Leer system_prompt real desde DATA_DIR/prompts/system/{id}.md
+        prompt_file = DATA_DIR / "prompts" / "system" / f"{agent_id}.md"
+        if prompt_file.exists():
+            agent["system_prompt"] = prompt_file.read_text(encoding="utf-8")
+        elif not agent.get("system_prompt"):
+            # Fallback a defaults
+            default_prompt = DEFAULTS_DIR / "prompts" / f"{agent_id}.md"
+            if default_prompt.exists():
+                agent["system_prompt"] = default_prompt.read_text(encoding="utf-8")
+
+        # 2. Leer contenido de cada skill file
+        skill_contents = {}
+        for skill_name in agent.get("skills", []):
+            # Buscar el skill en DATA_DIR/prompts/skills/ o DEFAULTS_DIR/prompts/
+            skill_paths = [
+                DATA_DIR / "prompts" / "skills" / f"{skill_name}.md",
+                DEFAULTS_DIR / "prompts" / f"{skill_name}.md",
+                DATA_DIR / "prompts" / "system" / f"{skill_name}.md",
+            ]
+            for sp in skill_paths:
+                if sp.exists():
+                    skill_contents[skill_name] = sp.read_text(encoding="utf-8")
+                    break
+            else:
+                skill_contents[skill_name] = ""  # skill no encontrado en disco
+
+        agent["skill_contents"] = skill_contents
+
+    return agents_data
 
 
 @app.put("/api/agents/{agent_id}")
@@ -1632,6 +1724,18 @@ def update_agent(agent_id: str, update: AgentConfigUpdate):
             return agent
 
     raise HTTPException(status_code=404, detail="Agente no encontrado")
+
+
+@app.put("/api/agents/{agent_id}/skills/{skill_name}")
+def update_skill_content(agent_id: str, skill_name: str, body: dict):
+    """Guarda el contenido editado de un skill file para un agente."""
+    content = body.get("content", "")
+    # Guardar en DATA_DIR/prompts/skills/{skill_name}.md
+    skills_dir = DATA_DIR / "prompts" / "skills"
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    skill_file = skills_dir / f"{skill_name}.md"
+    skill_file.write_text(content, encoding="utf-8")
+    return {"ok": True, "skill": skill_name, "agent_id": agent_id, "size": len(content)}
 
 
 @app.get("/api/audit")
