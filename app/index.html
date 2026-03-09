@@ -2235,54 +2235,75 @@ function renderPubEditor(pub) {
   html += '<div class="form-group"><label>Prompt de imagen</label>';
   html += '<textarea id="editPubImagePrompt" style="min-height:60px">' + escapeHtml(pub.image_prompt || '') + '</textarea></div>';
 
-  // ── Sección de imagen ──
-  html += '<div style="background:var(--bg-base);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px">';
-  html += '<div style="font-size:12px;font-weight:700;color:var(--text-main);margin-bottom:10px">🖼️ Imagen del post</div>';
+  // ── Sección de generación con IA ──
+  html += '<div style="background:var(--bg-base);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:12px">';
+  html += '<div style="font-size:13px;font-weight:700;color:var(--text-main);margin-bottom:12px">🤖 Generación con IA</div>';
 
-  // Estado del proveedor de imagen (se carga async)
-  html += '<div id="imageProviderStatus" style="font-size:11px;color:var(--text-muted);margin-bottom:8px;padding:6px 8px;background:var(--bg-card);border-radius:6px">';
-  html += '<span class="loading-spinner" style="width:10px;height:10px;margin-right:6px"></span>Verificando proveedores de imagen...</div>';
-
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">';
-  // Selector: qué generar
-  html += '<div><label style="font-size:11px">¿Qué generar?</label>';
-  html += '<select id="editGenTarget" style="font-size:12px">';
-  html += '<option value="text">Texto del post</option>';
-  html += '<option value="image">Imagen del post</option>';
-  html += '</select></div>';
-  // Selector: modelo de imagen
-  html += '<div><label style="font-size:11px">Modelo de imagen (Ollama)</label>';
-  html += '<select id="editImageModel" style="font-size:12px">';
-  html += '<option value="x/z-image-turbo">z-image-turbo (rápido)</option>';
-  html += '<option value="x/flux2-klein">flux2-klein (alta calidad)</option>';
-  html += '</select></div>';
+  // ── Bloque 1: Modelo de texto (Ollama) ──
+  html += '<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:10px">';
+  html += '<div style="font-size:11px;font-weight:700;color:var(--accent);margin-bottom:6px">💬 Modelo de texto (Ollama)</div>';
+  html += '<div style="font-size:10px;color:var(--text-muted);margin-bottom:6px">Genera el texto del post usando el LLM local. Funciona en Windows, macOS y Linux.</div>';
+  html += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">';
+  html += '<select id="editTextModel" style="font-size:12px;flex:1" onchange="_onTextModelChange(this.value)">';
+  html += '<option value="">Cargando modelos...</option>';
+  html += '</select>';
+  html += '<span id="textModelStatus" style="font-size:10px;color:var(--text-muted)"></span>';
   html += '</div>';
-  // Instrucción libre
-  html += '<div style="margin-bottom:10px"><label style="font-size:11px">Instrucción adicional (opcional)</label>';
-  html += '<input type="text" id="editGenInstruction" placeholder="Ej: más formal, más corto, estilo minimalista..." style="font-size:12px" /></div>';
-  // Selector de idioma
-  html += '<div style="margin-bottom:10px"><label style="font-size:11px">Idioma de generación</label>';
+  html += '</div>';
+
+  // ── Bloque 2: Modelo de imagen ──
+  html += '<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:10px">';
+  html += '<div style="font-size:11px;font-weight:700;color:#a855f7;margin-bottom:6px">🖼️ Modelo de imagen</div>';
+  html += '<div id="imageProviderStatus" style="font-size:10px;color:var(--text-muted);margin-bottom:6px;min-height:16px">';
+  html += '<span class="loading-spinner" style="width:8px;height:8px;margin-right:4px"></span>Verificando...</div>';
+  html += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">';
+  html += '<select id="editImageModel" style="font-size:12px;flex:1" onchange="_onImageModelChange(this.value)">';
+  html += '<option value="embedded">Motor IA Embebido (LCM Dreamshaper) — Recomendado</option>';
+  html += '<option value="x/z-image-turbo">Ollama: z-image-turbo (macOS/Linux)</option>';
+  html += '<option value="x/flux2-klein">Ollama: flux2-klein (macOS/Linux)</option>';
+  html += '</select>';
+  html += '</div>';
+  html += '</div>';
+
+  // ── Bloque 3: Opciones de generación ──
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">';
+  // Qué generar
+  html += '<div><label style="font-size:11px;color:var(--text-muted)">¿Qué generar?</label>';
+  html += '<select id="editGenTarget" style="font-size:12px">';
+  html += '<option value="text">💬 Texto del post</option>';
+  html += '<option value="image">🖼️ Imagen del post</option>';
+  html += '</select></div>';
+  // Idioma
+  html += '<div><label style="font-size:11px;color:var(--text-muted)">Idioma</label>';
   html += '<select id="editGenLanguage" style="font-size:12px">';
   html += '<option value="es">Español</option>';
   html += '<option value="en">English</option>';
   html += '<option value="pt">Português</option>';
   html += '</select></div>';
+  html += '</div>';
 
-  // Botones: Generar con IA + Subir imagen manualmente
+  // Instrucción adicional
+  html += '<div style="margin-bottom:10px"><label style="font-size:11px;color:var(--text-muted)">Instrucción adicional (opcional)</label>';
+  html += '<input type="text" id="editGenInstruction" placeholder="Ej: más formal, más corto, estilo minimalista..." style="font-size:12px" /></div>';
+
+  // Botones de acción
   html += '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">';
-  html += '<button class="btn btn-accent btn-sm" id="btnGenerate" onclick="generateWithAI(\'' + pub.id + '\')">Generar con IA</button>';
-  html += '<span style="font-size:11px;color:var(--text-muted)">o</span>';
-  html += '<label class="btn btn-secondary btn-sm" style="cursor:pointer;margin:0" title="Cargar imagen desde tu computadora">';
-  html += '📂 Cargar desde disco';
+  html += '<button class="btn btn-accent btn-sm" id="btnGenerate" onclick="generateWithAI(\'' + pub.id + '\')" style="flex:1;min-width:140px">';
+  html += '🤖 Generar con IA</button>';
+  html += '<label class="btn btn-secondary btn-sm" style="cursor:pointer;margin:0;flex:1;min-width:140px;text-align:center" title="Cargar imagen desde tu computadora">';
+  html += '📂 Cargar imagen desde disco';
   html += '<input type="file" id="uploadImageInput" accept="image/png,image/jpeg,image/jpg,image/gif,image/webp,image/svg+xml" style="display:none" onchange="uploadImageManually(\'' + pub.id + '\', \'' + (state.activeCampaign ? state.activeCampaign.id : '') + '\')"/>';
   html += '</label>';
   html += '</div>';
 
   html += '</div>';
-  // ── fin sección imagen ──
+  // ── fin sección generación ──
 
-  // Cargar estado de proveedores de imagen en background
-  setTimeout(function() { _loadImageProviderStatus(); }, 100);
+  // Cargar modelos de texto y estado de imagen en background
+  setTimeout(function() {
+    _loadTextModels();
+    _loadImageProviderStatus();
+  }, 100);
 
   html += '<div class="form-group"><label>Estado de publicación</label>';
   html += '<select id="editPubStatus">';
@@ -2346,13 +2367,15 @@ function regeneratePub(pubId) {
 
 function generateWithAI(pubId) {
   var targetEl = document.getElementById('editGenTarget');
-  var modelEl = document.getElementById('editImageModel');
+  var imageModelEl = document.getElementById('editImageModel');
+  var textModelEl = document.getElementById('editTextModel');
   var instrEl = document.getElementById('editGenInstruction');
   var langEl = document.getElementById('editGenLanguage');
   var btn = document.getElementById('btnGenerate');
 
   var target = targetEl ? targetEl.value : 'text';
-  var imageModel = modelEl ? modelEl.value : 'x/z-image-turbo';
+  var imageModel = imageModelEl ? imageModelEl.value : 'embedded';
+  var textModel = textModelEl ? textModelEl.value : (window._activeTextModel || '');
   var instruction = instrEl ? instrEl.value.trim() : '';
   var language = langEl ? langEl.value : 'es';
 
@@ -2447,11 +2470,13 @@ function generateWithAI(pubId) {
       });
   } else {
     // Regenerar texto
-    showNotification('Regenerando texto con IA...', 'info');
+    var modelLabel = textModel ? textModel : 'modelo activo';
+    showNotification('💬 Regenerando texto con ' + modelLabel + '...', 'info');
     var url2 = apiUrl('/campaigns/' + state.activeCampaign.id + '/publications/' + pubId + '/regenerate');
     var params = [];
     if (instruction) params.push('instruction=' + encodeURIComponent(instruction));
     if (language) params.push('language=' + encodeURIComponent(language));
+    if (textModel) params.push('model=' + encodeURIComponent(textModel));
     if (params.length > 0) url2 += '?' + params.join('&');
     fetch(url2, {method: 'POST'})
       .then(function(r) { return r.json(); })
@@ -2614,6 +2639,100 @@ function _changeDiffusionModel(modelId) {
     .catch(function(e) {
       showNotification('Error al cambiar modelo: ' + e.message, 'error');
     });
+}
+
+/**
+ * Carga la lista de modelos de texto disponibles en Ollama y rellena el selector.
+ * También selecciona el modelo activo configurado.
+ */
+function _loadTextModels() {
+  var sel = document.getElementById('editTextModel');
+  var statusEl = document.getElementById('textModelStatus');
+  if (!sel) return;
+
+  fetch(apiUrl('/ollama/status'))
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var models = data.models || [];
+      var activeModel = (window._activeTextModel || '');
+
+      // Obtener modelo activo de config si no está en memoria
+      return fetch(apiUrl('/config'))
+        .then(function(r) { return r.json(); })
+        .then(function(cfg) {
+          activeModel = cfg.default_model || (models.length > 0 ? models[0] : '');
+          window._activeTextModel = activeModel;
+
+          if (models.length === 0) {
+            sel.innerHTML = '<option value="">Sin modelos instalados en Ollama</option>';
+            if (statusEl) statusEl.innerHTML = '<span style="color:#ef4444">⚠️ Ollama sin modelos</span>';
+            return;
+          }
+
+          // Filtrar modelos de imagen (no texto) del selector de texto
+          var imageModelPatterns = /image|flux|dall|sdxl|stable.diff|lcm|turbo.*img/i;
+          var textModels = models.filter(function(m) { return !imageModelPatterns.test(m); });
+          if (textModels.length === 0) textModels = models; // fallback: mostrar todos
+
+          var optHtml = '';
+          for (var i = 0; i < textModels.length; i++) {
+            var m = textModels[i];
+            var selected = (m === activeModel || m.split(':')[0] === activeModel.split(':')[0]) ? ' selected' : '';
+            optHtml += '<option value="' + m + '"' + selected + '>' + m + '</option>';
+          }
+          sel.innerHTML = optHtml;
+
+          if (statusEl) {
+            var available = data.available;
+            statusEl.innerHTML = available
+              ? '<span style="color:#22c55e">✅ Ollama activo</span>'
+              : '<span style="color:#ef4444">❌ Ollama no disponible</span>';
+          }
+        });
+    })
+    .catch(function() {
+      sel.innerHTML = '<option value="">Error al cargar modelos</option>';
+      if (statusEl) statusEl.innerHTML = '<span style="color:#ef4444">❌ Error</span>';
+    });
+}
+
+/** Actualiza el modelo de texto activo cuando el usuario cambia el selector. */
+function _onTextModelChange(model) {
+  if (!model) return;
+  window._activeTextModel = model;
+  // Actualizar config en el servidor
+  fetch(apiUrl('/config'), {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({default_model: model})
+  })
+    .then(function(r) { return r.json(); })
+    .then(function() {
+      var statusEl = document.getElementById('textModelStatus');
+      if (statusEl) {
+        statusEl.innerHTML = '<span style="color:#22c55e">✅ ' + model + '</span>';
+        setTimeout(function() {
+          statusEl.innerHTML = '<span style="color:#22c55e">✅ Ollama activo</span>';
+        }, 2000);
+      }
+    })
+    .catch(function(e) {
+      showNotification('Error al cambiar modelo de texto: ' + e.message, 'error');
+    });
+}
+
+/** Actualiza el selector de imagen y muestra información contextual según el modelo elegido. */
+function _onImageModelChange(model) {
+  var statusEl = document.getElementById('imageProviderStatus');
+  if (!statusEl) return;
+
+  if (model === 'embedded') {
+    statusEl.innerHTML = '🤖 <strong>Motor IA Embebido</strong> — Genera imágenes localmente. Funciona en <strong>Windows, macOS y Linux</strong>. La primera vez descarga el modelo (~2GB).';
+  } else if (model.startsWith('x/') || model.startsWith('ollama')) {
+    statusEl.innerHTML = '🦙 <strong>Ollama</strong> — Generación de imágenes vía Ollama. Disponible en <strong>macOS y Linux</strong>. En Windows puede no funcionar.';
+  } else {
+    statusEl.innerHTML = '🖼️ Modelo personalizado: ' + model;
+  }
 }
 
 /**

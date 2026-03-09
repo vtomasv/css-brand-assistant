@@ -387,6 +387,30 @@ def get_ollama_timeout(kind: str = "default") -> int:
         return fallback
 
 
+def _fix_encoding(text: str) -> str:
+    """Repara caracteres mal codificados en respuestas del LLM.
+
+    En Windows con Ollama antiguo, la respuesta HTTP puede llegar con
+    encoding incorrecto (latin-1 detectado en lugar de UTF-8), produciendo
+    secuencias como 'Ã\xa1' en lugar de 'á', 'Ã\xb1' en lugar de 'ñ', etc.
+
+    Este helper intenta detectar y corregir esa doble-codificación.
+    """
+    if not text:
+        return text
+    try:
+        # Detectar si el texto tiene caracteres que parecen UTF-8 mal interpretados como latin-1
+        # Patrón: caracteres en rango 0xC0-0xFF seguidos de caracteres en rango 0x80-0xBF
+        # (característico de UTF-8 de 2 bytes interpretado como latin-1)
+        fixed = text.encode("latin-1", errors="replace").decode("utf-8", errors="replace")
+        # Solo usar la versión reparada si tiene menos caracteres de reemplazo que el original
+        if fixed.count("�") < text.count("�") and fixed != text:
+            return fixed
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        pass
+    return text
+
+
 def call_ollama(model: str, system_prompt: str, user_message: str,
                 temperature: float = 0.7, timeout: Optional[int] = None) -> str:
     """Llama al LLM local vía Ollama API.
@@ -446,7 +470,13 @@ def call_ollama(model: str, system_prompt: str, user_message: str,
                 else:
                     response.raise_for_status()
                     _ollama_api_endpoint = "chat"
-                    return response.json()["message"]["content"]
+                    # Forzar UTF-8 en la decodificación de la respuesta HTTP
+                    # (en Windows, requests puede detectar incorrectamente latin-1)
+                    response.encoding = "utf-8"
+                    content = response.json()["message"]["content"]
+                    # Reparar caracteres mal codificados (latin-1 interpretado como UTF-8)
+                    content = _fix_encoding(content)
+                    return content
             except HTTPException:
                 raise
             except requests.exceptions.HTTPError as e:
@@ -483,7 +513,12 @@ def call_ollama(model: str, system_prompt: str, user_message: str,
                     )
                 )
             response.raise_for_status()
-            return response.json().get("response", "")
+            # Forzar UTF-8 en la decodificación de la respuesta HTTP
+            response.encoding = "utf-8"
+            content = response.json().get("response", "")
+            # Reparar caracteres mal codificados
+            content = _fix_encoding(content)
+            return content
 
         raise HTTPException(status_code=503, detail="No se pudo determinar el endpoint de Ollama")
 
@@ -1356,20 +1391,31 @@ async def create_campaign(brand_id: str, campaign: CampaignCreate,
 
 async def _generate_campaign_plan(brand_id: str, campaign_id: str,
                                    campaign_data: dict, adn: dict):
-    """Genera la planificación temporal y publicaciones de la campaña."""
+    """Genera la planificación temporal y publicaciones de la campaña.
+
+    Estrategia de generación por lotes:
+    1. Paso 1: Generar la estructura de etapas (stages) y el calendario base.
+    2. Paso 2: Para cada etapa, generar las publicaciones en lotes pequeños
+               (máximo MAX_PUBS_PER_BATCH por llamada al LLM).
+
+    Esto evita que el LLM se sature con prompts muy largos y produzca
+    publicaciones incompletas o truncadas.
+    """
     import time
+    MAX_PUBS_PER_BATCH = 5  # Máximo de publicaciones por llamada al LLM
     start = time.time()
     campaign_dir = DATA_DIR / "campaigns" / f"{brand_id}_{campaign_id}"
 
     try:
         model = get_active_model()
-        adn_summary = json.dumps(adn.get("fields", {}), ensure_ascii=False)[:3000]
-
-        # Paso 1: Generar estructura narrativa de la campaña
-        system_prompt = get_system_prompt("campaign_strategist") or _get_campaign_strategist_prompt()
+        adn_summary = json.dumps(adn.get("fields", {}), ensure_ascii=False)[:2000]
         channels_str = ', '.join(campaign_data['channels'])
-        user_message = (
-            f"Crea la planificación estratégica para esta campaña.\n\n"
+        system_prompt = get_system_prompt("campaign_strategist") or _get_campaign_strategist_prompt()
+
+        # ── Paso 1: Generar estructura de etapas y calendario ────────────────
+        logger.info(f"[Campaña {campaign_id}] Paso 1: generando estructura de etapas...")
+        stages_message = (
+            f"Crea la estructura de etapas para esta campaña de marketing.\n\n"
             f"CAMPAÑA: {campaign_data['name']}\n"
             f"OBJETIVO: {campaign_data['objective']}\n"
             f"PRODUCTO/TEMA: {campaign_data['product_or_topic']}\n"
@@ -1378,44 +1424,221 @@ async def _generate_campaign_plan(brand_id: str, campaign_id: str,
             f"CANALES: {channels_str}\n"
             f"FRECUENCIA: {campaign_data['frequency']}\n\n"
             f"ADN DE MARCA:\n{adn_summary}\n\n"
-            f"INSTRUCCIONES IMPORTANTES:\n"
-            f"- Responde SOLO con JSON válido, sin texto antes ni después, sin bloques ```json.\n"
-            f"- El campo \"text\" de cada publicación debe contener el TEXTO REAL del post "
-            f"(lo que se publicaría en la red social), NO el JSON completo ni ningún otro campo.\n"
-            f"- Cada publicación debe tener: channel, scheduled_at, stage, objective, text, "
-            f"hashtags, cta, image_prompt.\n"
-            f"- El campo \"text\" debe ser un texto persuasivo y natural para {channels_str}, "
-            f"adaptado al ADN de marca y a la etapa de la campaña.\n\n"
-            f"Estructura JSON requerida:\n"
-            f'{{"stages": [...], "publications": [{{"channel": "...", "scheduled_at": "YYYY-MM-DD HH:MM", '
-            f'"stage": "...", "objective": "...", "text": "texto real del post", '
-            f'"hashtags": ["#tag"], "cta": "...", "image_prompt": "..."}}]}}'
+            f"INSTRUCCIONES:\n"
+            f"- Responde SOLO con JSON válido, sin texto antes ni después.\n"
+            f"- Define entre 3 y 5 etapas narrativas para la campaña.\n"
+            f"- Para cada etapa, indica: name, description, days (rango), focus, channels_priority.\n"
+            f"- Calcula cuántas publicaciones hay por etapa según la frecuencia y los canales.\n\n"
+            f"Formato JSON:\n"
+            f'{{"stages": [{{"name": "Descubrimiento", "description": "...", "days": "1-5", '
+            f'"focus": "awareness", "publications_count": 3}}]}}'
         )
 
-        plan_result = call_ollama(
-            model, system_prompt, user_message,
-            temperature=0.5,
-            timeout=get_ollama_timeout("campaign"),
+        stages_result = call_ollama(
+            model, system_prompt, stages_message,
+            temperature=0.4,
+            timeout=get_ollama_timeout("adn"),
         )
+        stages_parsed = _extract_json_from_llm(stages_result)
+        stages = (stages_parsed or {}).get("stages") or [
+            {"name": "Descubrimiento", "description": "Presentación y awareness",        "days": "1-3",  "focus": "awareness"},
+            {"name": "Consideración",  "description": "Beneficios y propuesta de valor",  "days": "4-8",  "focus": "engagement"},
+            {"name": "Activación",     "description": "CTA directo y conversión",         "days": "9-12", "focus": "conversion"},
+            {"name": "Cierre",         "description": "Urgencia y recordación",           "days": "13+",  "focus": "retention"},
+        ]
+        logger.info(f"[Campaña {campaign_id}] Etapas generadas: {[s['name'] for s in stages]}")
 
-        # Parsear y guardar plan
-        plan = _parse_campaign_plan(plan_result, campaign_data)
+        # ── Paso 2: Calcular calendario de publicaciones ─────────────────────
+        start_dt  = datetime.strptime(campaign_data["start_date"], "%Y-%m-%d")
+        end_dt    = datetime.strptime(campaign_data["end_date"],   "%Y-%m-%d")
+        total_days = (end_dt - start_dt).days + 1
+        channels   = campaign_data.get("channels", ["Instagram"])
+        frequency  = campaign_data.get("frequency", "diaria")
+
+        # Determinar frecuencia en días
+        freq_map = {
+            "diaria": 1, "daily": 1,
+            "cada 2 dias": 2, "cada 2 días": 2, "every 2 days": 2,
+            "semanal": 7, "weekly": 7,
+            "bisemanal": 4, "twice a week": 4,
+        }
+        freq_days = freq_map.get(frequency.lower(), 1)
+
+        # Construir lista de slots (fecha, canal, etapa)
+        slots = []
+        for day_offset in range(0, total_days, freq_days):
+            current_date = start_dt + timedelta(days=day_offset)
+            stage_idx = min(int(day_offset / max(total_days / len(stages), 1)), len(stages) - 1)
+            stage = stages[stage_idx]
+            for channel in channels:
+                slots.append({
+                    "date": current_date.strftime("%Y-%m-%d"),
+                    "channel": channel,
+                    "stage": stage["name"],
+                    "stage_focus": stage.get("focus", "awareness"),
+                })
+
+        logger.info(f"[Campaña {campaign_id}] Total slots calculados: {len(slots)} publicaciones")
+
+        # ── Paso 3: Generar publicaciones en lotes ───────────────────────────
+        all_publications = []
+        total_batches = (len(slots) + MAX_PUBS_PER_BATCH - 1) // MAX_PUBS_PER_BATCH
+
+        for batch_idx in range(total_batches):
+            batch_slots = slots[batch_idx * MAX_PUBS_PER_BATCH : (batch_idx + 1) * MAX_PUBS_PER_BATCH]
+            logger.info(
+                f"[Campaña {campaign_id}] Lote {batch_idx + 1}/{total_batches}: "
+                f"{len(batch_slots)} publicaciones..."
+            )
+
+            # Actualizar progreso en el archivo de campaña
+            try:
+                camp_file = campaign_dir / "campaign.json"
+                camp_progress = load_json(camp_file)
+                camp_progress["status"] = "generating"
+                camp_progress["generation_progress"] = {
+                    "batch": batch_idx + 1,
+                    "total_batches": total_batches,
+                    "publications_done": len(all_publications),
+                    "publications_total": len(slots),
+                }
+                camp_progress["updated_at"] = datetime.utcnow().isoformat()
+                save_json(camp_file, camp_progress)
+            except Exception:
+                pass
+
+            # Construir prompt del lote
+            slots_desc = "\n".join([
+                f"  {i+1}. Canal: {s['channel']}, Fecha: {s['date']} 10:00, "
+                f"Etapa: {s['stage']} (foco: {s['stage_focus']})"
+                for i, s in enumerate(batch_slots)
+            ])
+
+            batch_message = (
+                f"Genera exactamente {len(batch_slots)} publicaciones de marketing para las siguientes posiciones.\n\n"
+                f"DATOS DE LA CAMPAÑA:\n"
+                f"- Producto/Tema: {campaign_data['product_or_topic']}\n"
+                f"- Audiencia: {campaign_data['target_audience']}\n"
+                f"- Objetivo: {campaign_data['objective']}\n"
+                f"- Marca: {campaign_data.get('brand_name', '')}\n\n"
+                f"ADN DE MARCA (resumen):\n{adn_summary[:1000]}\n\n"
+                f"POSICIONES A GENERAR:\n{slots_desc}\n\n"
+                f"INSTRUCCIONES IMPORTANTES:\n"
+                f"- Responde SOLO con JSON válido, sin texto antes ni después.\n"
+                f"- Genera EXACTAMENTE {len(batch_slots)} publicaciones en el array 'publications'.\n"
+                f"- El campo 'text' debe ser el TEXTO REAL del post (no JSON, no descripción).\n"
+                f"- El texto debe ser persuasivo, natural y adaptado al canal y etapa.\n"
+                f"- Usa acentos y caracteres especiales correctamente (español).\n"
+                f"- Cada publicación debe tener: channel, scheduled_at, stage, objective, "
+                f"text, hashtags (array), cta, image_prompt.\n\n"
+                f"Formato JSON:\n"
+                f'{{"publications": [{{"channel": "...", "scheduled_at": "YYYY-MM-DD HH:MM", '
+                f'"stage": "...", "objective": "...", "text": "texto real del post", '
+                f'"hashtags": ["#tag1"], "cta": "...", "image_prompt": "..."}}]}}'
+            )
+
+            try:
+                batch_result = call_ollama(
+                    model, system_prompt, batch_message,
+                    temperature=0.6,
+                    timeout=get_ollama_timeout("campaign"),
+                )
+                batch_parsed = _extract_json_from_llm(batch_result)
+                batch_pubs = (batch_parsed or {}).get("publications", [])
+
+                if batch_pubs:
+                    # Asignar IDs y campos requeridos
+                    for i, pub in enumerate(batch_pubs):
+                        pub["id"] = str(uuid.uuid4())
+                        pub["campaign_id"] = campaign_data["id"]
+                        pub["brand_id"] = campaign_data["brand_id"]
+                        pub.setdefault("status", "pending")
+                        pub.setdefault("edit_status", "draft")
+
+                        # Sanear texto si contiene JSON crudo
+                        raw_text = pub.get("text", "")
+                        if not raw_text or raw_text.strip().startswith("{") or \
+                           "\"stages\"" in raw_text or "\"publications\"" in raw_text:
+                            slot = batch_slots[i] if i < len(batch_slots) else batch_slots[-1]
+                            pub["text"] = _build_fallback_post_text(
+                                slot["channel"], slot["stage"], campaign_data
+                            )
+                            pub["edit_status"] = "needs_review"
+
+                        # Asegurar scheduled_at del slot si el LLM lo omitió
+                        if not pub.get("scheduled_at") and i < len(batch_slots):
+                            pub["scheduled_at"] = batch_slots[i]["date"] + " 10:00"
+                        if not pub.get("channel") and i < len(batch_slots):
+                            pub["channel"] = batch_slots[i]["channel"]
+                        if not pub.get("stage") and i < len(batch_slots):
+                            pub["stage"] = batch_slots[i]["stage"]
+
+                    all_publications.extend(batch_pubs)
+                    logger.info(f"[Campaña {campaign_id}] Lote {batch_idx+1}: {len(batch_pubs)} pubs OK")
+                else:
+                    # Fallback: generar publicaciones básicas para este lote
+                    logger.warning(f"[Campaña {campaign_id}] Lote {batch_idx+1}: LLM no retornó publicaciones, usando fallback")
+                    for slot in batch_slots:
+                        all_publications.append({
+                            "id": str(uuid.uuid4()),
+                            "campaign_id": campaign_data["id"],
+                            "brand_id": campaign_data["brand_id"],
+                            "channel": slot["channel"],
+                            "scheduled_at": slot["date"] + " 10:00",
+                            "stage": slot["stage"],
+                            "objective": campaign_data["objective"],
+                            "text": _build_fallback_post_text(slot["channel"], slot["stage"], campaign_data),
+                            "hashtags": ["#marca", "#marketing"],
+                            "cta": "¡Contáctanos!",
+                            "image_prompt": f"Imagen para {slot['channel']} sobre {campaign_data['product_or_topic']}",
+                            "status": "pending",
+                            "edit_status": "needs_review",
+                        })
+
+            except Exception as batch_err:
+                logger.error(f"[Campaña {campaign_id}] Error en lote {batch_idx+1}: {batch_err}")
+                # Generar fallback para este lote y continuar
+                for slot in batch_slots:
+                    all_publications.append({
+                        "id": str(uuid.uuid4()),
+                        "campaign_id": campaign_data["id"],
+                        "brand_id": campaign_data["brand_id"],
+                        "channel": slot["channel"],
+                        "scheduled_at": slot["date"] + " 10:00",
+                        "stage": slot["stage"],
+                        "objective": campaign_data["objective"],
+                        "text": _build_fallback_post_text(slot["channel"], slot["stage"], campaign_data),
+                        "hashtags": ["#marca", "#marketing"],
+                        "cta": "¡Contáctanos!",
+                        "image_prompt": f"Imagen para {slot['channel']} sobre {campaign_data['product_or_topic']}",
+                        "status": "pending",
+                        "edit_status": "needs_review",
+                    })
+
+        # ── Guardar plan completo ────────────────────────────────────────────
+        plan = {"stages": stages, "publications": all_publications}
         save_json(campaign_dir / "plan.json", plan)
 
         # Actualizar estado de la campaña
         camp_file = campaign_dir / "campaign.json"
         camp = load_json(camp_file)
         camp["status"] = "active"
-        camp["publications_count"] = len(plan.get("publications", []))
-        camp["stages_count"] = len(plan.get("stages", []))
+        camp["publications_count"] = len(all_publications)
+        camp["stages_count"] = len(stages)
         camp["updated_at"] = datetime.utcnow().isoformat()
+        camp.pop("generation_progress", None)  # Limpiar progreso
         save_json(camp_file, camp)
 
         latency = int((time.time() - start) * 1000)
         log_audit("campaign_strategist", "generate_campaign_plan",
                   {"brand_id": brand_id, "campaign_id": campaign_id},
-                  plan_result[:500], model, latency, True)
-        logger.info(f"Plan de campaña generado: {campaign_id} — {len(plan.get('publications', []))} publicaciones")
+                  f"{len(all_publications)} publicaciones en {total_batches} lotes",
+                  model, latency, True)
+        logger.info(
+            f"[Campaña {campaign_id}] Generación completa: "
+            f"{len(all_publications)} publicaciones en {total_batches} lotes, "
+            f"{latency/1000:.1f}s total"
+        )
 
     except Exception as e:
         camp_file = campaign_dir / "campaign.json"
@@ -1714,8 +1937,13 @@ def update_publication(campaign_id: str, pub_id: str, update: PublicationUpdate)
 @app.post("/api/campaigns/{campaign_id}/publications/{pub_id}/regenerate")
 async def regenerate_publication(campaign_id: str, pub_id: str,
                                   instruction: Optional[str] = None,
-                                  language: Optional[str] = None):
-    """Regenera una publicación con instrucción y/o idioma opcionales."""
+                                  language: Optional[str] = None,
+                                  model: Optional[str] = None):
+    """Regenera una publicación con instrucción, idioma y modelo opcionales.
+    
+    El parámetro `model` permite al frontend especificar qué modelo de texto
+    usar para la regeneración, sin cambiar el modelo activo global.
+    """
     import time, re
     start = time.time()
 
@@ -1736,7 +1964,8 @@ async def regenerate_publication(campaign_id: str, pub_id: str,
                           load_json(DATA_DIR / "brands" / brand_id / "adn_draft.json", {})
                     adn_summary = json.dumps(adn.get("fields", {}), ensure_ascii=False)[:1500]
 
-                    model = get_active_model()
+                    # Usar el modelo especificado o el activo global
+                    model = model or get_active_model()
                     system_prompt = get_system_prompt("content_writer") or _get_content_writer_prompt()
 
                     user_message = (
