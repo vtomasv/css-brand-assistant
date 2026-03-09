@@ -1327,21 +1327,30 @@ async def _generate_campaign_plan(brand_id: str, campaign_id: str,
 
         # Paso 1: Generar estructura narrativa de la campaña
         system_prompt = get_system_prompt("campaign_strategist") or _get_campaign_strategist_prompt()
-        user_message = f"""Crea la planificación estratégica para esta campaña:
-
-CAMPAÑA: {campaign_data['name']}
-OBJETIVO: {campaign_data['objective']}
-PRODUCTO/TEMA: {campaign_data['product_or_topic']}
-AUDIENCIA: {campaign_data['target_audience']}
-PERÍODO: {campaign_data['start_date']} al {campaign_data['end_date']}
-CANALES: {', '.join(campaign_data['channels'])}
-FRECUENCIA: {campaign_data['frequency']}
-
-ADN DE MARCA:
-{adn_summary}
-
-Genera un plan con etapas narrativas, distribución por canal y calendario de publicaciones.
-Responde en JSON con la estructura: stages (lista de etapas) y publications (lista de publicaciones)."""
+        channels_str = ', '.join(campaign_data['channels'])
+        user_message = (
+            f"Crea la planificación estratégica para esta campaña.\n\n"
+            f"CAMPAÑA: {campaign_data['name']}\n"
+            f"OBJETIVO: {campaign_data['objective']}\n"
+            f"PRODUCTO/TEMA: {campaign_data['product_or_topic']}\n"
+            f"AUDIENCIA: {campaign_data['target_audience']}\n"
+            f"PERÍODO: {campaign_data['start_date']} al {campaign_data['end_date']}\n"
+            f"CANALES: {channels_str}\n"
+            f"FRECUENCIA: {campaign_data['frequency']}\n\n"
+            f"ADN DE MARCA:\n{adn_summary}\n\n"
+            f"INSTRUCCIONES IMPORTANTES:\n"
+            f"- Responde SOLO con JSON válido, sin texto antes ni después, sin bloques ```json.\n"
+            f"- El campo \"text\" de cada publicación debe contener el TEXTO REAL del post "
+            f"(lo que se publicaría en la red social), NO el JSON completo ni ningún otro campo.\n"
+            f"- Cada publicación debe tener: channel, scheduled_at, stage, objective, text, "
+            f"hashtags, cta, image_prompt.\n"
+            f"- El campo \"text\" debe ser un texto persuasivo y natural para {channels_str}, "
+            f"adaptado al ADN de marca y a la etapa de la campaña.\n\n"
+            f"Estructura JSON requerida:\n"
+            f'{{"stages": [...], "publications": [{{"channel": "...", "scheduled_at": "YYYY-MM-DD HH:MM", '
+            f'"stage": "...", "objective": "...", "text": "texto real del post", '
+            f'"hashtags": ["#tag"], "cta": "...", "image_prompt": "..."}}]}}'
+        )
 
         plan_result = call_ollama(
             model, system_prompt, user_message,
@@ -1381,65 +1390,191 @@ Responde en JSON con la estructura: stages (lista de etapas) y publications (lis
         logger.error(f"Error generando campaña {campaign_id}: {e}")
 
 
-def _parse_campaign_plan(llm_output: str, campaign_data: dict) -> dict:
-    """Parsea el plan de campaña del LLM, con fallback a estructura básica."""
-    import re
-    from datetime import date
+def _extract_json_from_llm(text: str) -> Optional[dict]:
+    """Extrae el primer objeto JSON válido de la respuesta del LLM.
 
-    json_match = re.search(r'\{.*\}', llm_output, re.DOTALL)
-    if json_match:
+    Maneja los casos más comunes en Windows/Ollama antiguo:
+    - JSON envuelto en bloques ```json ... ```
+    - JSON precedido de texto explicativo
+    - JSON con objetos anidados de profundidad variable
+    """
+    import re
+
+    # 1. Eliminar bloques de código markdown
+    cleaned = re.sub(r'```(?:json)?\s*', '', text)
+    cleaned = re.sub(r'```\s*$', '', cleaned, flags=re.MULTILINE)
+    cleaned = cleaned.strip()
+
+    # 2. Intentar parsear el texto completo directamente
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    # 3. Buscar el primer '{' y encontrar el JSON balanceado desde ahí
+    start_idx = cleaned.find('{')
+    if start_idx == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    escape_next = False
+    end_idx = -1
+
+    for i, ch in enumerate(cleaned[start_idx:], start=start_idx):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == '\\' and in_string:
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                end_idx = i
+                break
+
+    if end_idx == -1:
+        return None
+
+    candidate = cleaned[start_idx:end_idx + 1]
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        pass
+
+    # 4. Último recurso: regex greedy (comportamiento anterior)
+    match = re.search(r'\{.*\}', cleaned, re.DOTALL)
+    if match:
         try:
-            parsed = json.loads(json_match.group())
-            if "publications" in parsed:
-                # Asegurar que cada publicación tenga ID y campos requeridos
-                for i, pub in enumerate(parsed["publications"]):
-                    if "id" not in pub:
-                        pub["id"] = str(uuid.uuid4())
-                    pub.setdefault("status", "pending")
-                    pub.setdefault("campaign_id", campaign_data["id"])
-                    pub.setdefault("brand_id", campaign_data["brand_id"])
-                return parsed
+            return json.loads(match.group())
         except json.JSONDecodeError:
             pass
 
-    # Fallback: generar publicaciones básicas
-    start = datetime.strptime(campaign_data["start_date"], "%Y-%m-%d")
-    end = datetime.strptime(campaign_data["end_date"], "%Y-%m-%d")
-    days = (end - start).days + 1
+    return None
+
+
+def _parse_campaign_plan(llm_output: str, campaign_data: dict) -> dict:
+    """Parsea el plan de campaña del LLM, con fallback a estructura básica.
+
+    Usa _extract_json_from_llm para manejar correctamente respuestas con
+    bloques markdown, texto previo o JSON parcialmente malformado.
+    """
+    parsed = _extract_json_from_llm(llm_output)
+
+    if parsed and "publications" in parsed:
+        # Asegurar que cada publicación tenga ID y campos requeridos
+        for pub in parsed["publications"]:
+            if "id" not in pub:
+                pub["id"] = str(uuid.uuid4())
+            pub.setdefault("status", "pending")
+            pub.setdefault("edit_status", "draft")
+            pub.setdefault("campaign_id", campaign_data["id"])
+            pub.setdefault("brand_id", campaign_data["brand_id"])
+
+            # Sanear el campo text: si contiene JSON crudo, reemplazarlo
+            raw_text = pub.get("text", "")
+            if raw_text and (raw_text.strip().startswith("{") or "\"stages\"" in raw_text or "\"publications\"" in raw_text):
+                pub["text"] = _build_fallback_post_text(
+                    pub.get("channel", "Red social"),
+                    pub.get("stage", ""),
+                    campaign_data,
+                )
+                pub["edit_status"] = "needs_review"
+
+        return parsed
+
+    # Fallback completo: generar publicaciones básicas con texto limpio
+    start_dt = datetime.strptime(campaign_data["start_date"], "%Y-%m-%d")
+    end_dt   = datetime.strptime(campaign_data["end_date"],   "%Y-%m-%d")
+    days     = (end_dt - start_dt).days + 1
     channels = campaign_data.get("channels", ["Instagram"])
 
-    publications = []
     stages = [
-        {"name": "Descubrimiento", "description": "Presentación y awareness", "days": "1-3"},
-        {"name": "Consideración", "description": "Beneficios y propuesta de valor", "days": "4-8"},
-        {"name": "Activación", "description": "CTA directo y conversión", "days": "9-12"},
-        {"name": "Cierre", "description": "Urgencia y recordación", "days": "13+"},
+        {"name": "Descubrimiento", "description": "Presentación y awareness",        "days": "1-3"},
+        {"name": "Consideración",  "description": "Beneficios y propuesta de valor",  "days": "4-8"},
+        {"name": "Activación",     "description": "CTA directo y conversión",         "days": "9-12"},
+        {"name": "Cierre",         "description": "Urgencia y recordación",           "days": "13+"},
     ]
 
+    publications = []
     pub_count = 0
     for day_offset in range(min(days, 15)):
-        current_date = start + timedelta(days=day_offset)
-        stage_idx = min(day_offset // 4, len(stages) - 1)
+        current_date = start_dt + timedelta(days=day_offset)
+        stage_idx    = min(day_offset // 4, len(stages) - 1)
 
         for channel in channels[:2]:  # máximo 2 canales en fallback
             pub_count += 1
             publications.append({
-                "id": str(uuid.uuid4()),
-                "campaign_id": campaign_data["id"],
-                "brand_id": campaign_data["brand_id"],
-                "channel": channel,
+                "id":           str(uuid.uuid4()),
+                "campaign_id":  campaign_data["id"],
+                "brand_id":     campaign_data["brand_id"],
+                "channel":      channel,
                 "scheduled_at": current_date.strftime("%Y-%m-%d") + " 10:00",
-                "stage": stages[stage_idx]["name"],
-                "objective": campaign_data["objective"],
-                "text": f"[Publicación {pub_count} — {channel} — {stages[stage_idx]['name']}]\n{llm_output[:200]}",
-                "hashtags": ["#marca", "#marketing", "#pyme"],
-                "cta": "¡Contáctanos!",
+                "stage":        stages[stage_idx]["name"],
+                "objective":    campaign_data["objective"],
+                # Texto limpio — nunca incluir el output crudo del LLM
+                "text":         _build_fallback_post_text(channel, stages[stage_idx]["name"], campaign_data),
+                "hashtags":     ["#marca", "#marketing", "#pyme"],
+                "cta":          "¡Contáctanos!",
                 "image_prompt": f"Imagen para {channel} sobre {campaign_data['product_or_topic']}",
-                "status": "pending",
-                "edit_status": "draft",
+                "status":       "pending",
+                "edit_status":  "needs_review",  # indica que necesita revisión manual
             })
 
+    logger.warning(
+        f"No se pudo parsear el plan del LLM para campaña {campaign_data['id']}. "
+        f"Usando fallback con {len(publications)} publicaciones básicas."
+    )
     return {"stages": stages, "publications": publications, "raw_plan": llm_output[:2000]}
+
+
+def _build_fallback_post_text(channel: str, stage: str, campaign_data: dict) -> str:
+    """Genera un texto de post genérico pero limpio cuando el LLM no devuelve texto válido."""
+    product = campaign_data.get("product_or_topic", "nuestros servicios")
+    audience = campaign_data.get("target_audience", "nuestros clientes")
+    brand = campaign_data.get("brand_name", "")
+
+    templates = {
+        "Descubrimiento": (
+            f"¿Conoces {product}? "
+            f"{'En ' + brand + ', te' if brand else 'Te'} presentamos una solución pensada para {audience}. "
+            f"¡Sigue nuestra cuenta para saber más!"
+        ),
+        "Consideración": (
+            f"{product}: la herramienta que {audience} necesita. "
+            f"Descubrí cómo podemos ayudarte a alcanzar tus objetivos. "
+            f"¡Contáctanos hoy!"
+        ),
+        "Activación": (
+            f"¡Es el momento de actuar! "
+            f"{product} está disponible para {audience}. "
+            f"No dejes pasar esta oportunidad. ¡Escribinos ahora!"
+        ),
+        "Cierre": (
+            f"Últimos días para aprovechar nuestra propuesta en {product}. "
+            f"{audience}: ¡no te quedes sin tu lugar! ¡Reservá hoy!"
+        ),
+    }
+    base_text = templates.get(stage, templates["Descubrimiento"])
+
+    # Agregar indicación del canal si es relevante
+    channel_hint = {
+        "LinkedIn":  " #networking #profesionales",
+        "Instagram": " ✨ #emprendimiento",
+        "Facebook":  " 📌 ¡Compartilo con tu red!",
+        "Twitter":   " #pyme",
+        "TikTok":    " 🎥 ¡Mirá nuestro video!",
+    }.get(channel, "")
+
+    return base_text + channel_hint
 
 
 def _get_campaign_strategist_prompt() -> str:
