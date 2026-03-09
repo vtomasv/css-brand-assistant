@@ -1448,18 +1448,21 @@ function loadInterview() {
     return;
   }
 
-  content.innerHTML = '<div class="card"><div class="card-header"><div><div class="card-title">Entrevista de Descubrimiento</div><div class="card-subtitle">Marca: ' + escapeHtml(state.activeBrand.name) + '</div></div></div>' +
-    '<p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">El agente de marketing te hará preguntas para construir y refinar el ADN de tu marca. Responde con naturalidad; el sistema extraerá los insights automáticamente.</p>' +
+  content.innerHTML = '<div class="card"><div class="card-header"><div><div class="card-title">Entrevista de Descubrimiento</div><div class="card-subtitle">Marca: ' + escapeHtml(state.activeBrand.name) + '</div></div>' +
+    '<div style="display:flex;gap:8px;align-items:center">' +
+    '<button class="btn btn-secondary btn-sm" onclick="startInterview()">Reiniciar</button>' +
+    '<button class="btn btn-danger btn-sm" id="btnFinishInterview" onclick="finishInterview()" style="background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3)">Finalizar entrevista</button>' +
+    '</div></div>' +
+    '<p style="font-size:13px;color:var(--text-muted);margin-bottom:8px">El agente te hará preguntas para construir el ADN de tu marca. Responde con naturalidad. Escribe <strong>"fin"</strong> o haz clic en <strong>Finalizar entrevista</strong> para terminar y actualizar el ADN.</p>' +
     '<div class="chat-container" id="chatContainer">' +
     '<div class="chat-messages" id="chatMessages">' +
     '<div class="chat-message system-msg">Sesión iniciada. El agente está listo para comenzar la entrevista.</div>' +
     '</div>' +
     '<div class="chat-input-area">' +
-    '<textarea class="chat-input" id="chatInput" placeholder="Escribe tu respuesta..." onkeydown="handleChatKey(event)"></textarea>' +
+    '<textarea class="chat-input" id="chatInput" placeholder="Escribe tu respuesta... (escribe \"fin\" para terminar)" onkeydown="handleChatKey(event)"></textarea>' +
     '<button class="btn btn-primary" onclick="sendInterviewMessage()" id="btnSendChat">Enviar</button>' +
     '</div></div>' +
     '<div style="margin-top:12px;display:flex;gap:8px">' +
-    '<button class="btn btn-secondary btn-sm" onclick="startInterview()">Iniciar entrevista</button>' +
     '<button class="btn btn-accent btn-sm" onclick="navigateTo(\'adn\')">Ver ADN actualizado</button>' +
     '</div></div>';
 
@@ -1483,6 +1486,17 @@ function sendInterviewMessage() {
   var input = document.getElementById('chatInput');
   var message = input.value.trim();
   if (!message) return;
+
+  // Detectar palabras clave de finalización
+  var finKeywords = ['fin', 'terminar', 'finalizar', 'listo', 'done', 'finish', 'termina', 'cerrar'];
+  var msgLower = message.toLowerCase().trim();
+  if (finKeywords.indexOf(msgLower) !== -1) {
+    input.value = '';
+    addChatMessage('user', message);
+    addChatMessage('system-msg', 'Finalizando entrevista y actualizando ADN...');
+    finishInterview();
+    return;
+  }
 
   addChatMessage('user', message);
   input.value = '';
@@ -1513,6 +1527,57 @@ function sendInterviewMessage() {
       btn.disabled = false;
       btn.innerHTML = 'Enviar';
       addChatMessage('system-msg', 'Error al contactar al agente: ' + e.message);
+    });
+}
+
+function finishInterview() {
+  if (!state.activeBrand) return;
+
+  var btn = document.getElementById('btnFinishInterview');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="loading-spinner"></span> Procesando...'; }
+
+  var sendBtn = document.getElementById('btnSendChat');
+  if (sendBtn) { sendBtn.disabled = true; }
+
+  var input = document.getElementById('chatInput');
+  if (input) { input.disabled = true; }
+
+  addChatMessage('system-msg', 'Finalizando entrevista. Analizando la conversación y actualizando el ADN de marca...');
+
+  var url = apiUrl('/brands/' + state.activeBrand.id + '/interview/finish');
+  if (state.interviewSessionId) {
+    url += '?session_id=' + encodeURIComponent(state.interviewSessionId);
+  }
+
+  fetch(url, {method: 'POST'})
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (btn) { btn.disabled = false; btn.innerHTML = 'Finalizar entrevista'; }
+      if (sendBtn) { sendBtn.disabled = false; }
+      if (input) { input.disabled = false; }
+
+      if (data.status === 'finished') {
+        var msg = data.adn_updated
+          ? 'Entrevista finalizada. ADN actualizado con ' + data.message_count + ' mensajes analizados. Ve a la sección ADN para revisar los cambios.'
+          : 'Entrevista finalizada (' + data.message_count + ' mensajes). ' + (data.message || '');
+        addChatMessage('system-msg', msg);
+        showNotification('Entrevista finalizada. ADN actualizado.', 'success');
+        // Resetear sesión
+        state.interviewSessionId = null;
+        // Deshabilitar input
+        if (input) { input.disabled = true; input.placeholder = 'Entrevista finalizada. Inicia una nueva si lo necesitas.'; }
+        if (sendBtn) { sendBtn.disabled = true; }
+      } else {
+        addChatMessage('system-msg', 'Estado: ' + (data.message || data.status));
+        showNotification(data.message || 'Entrevista finalizada', 'info');
+      }
+    })
+    .catch(function(e) {
+      if (btn) { btn.disabled = false; btn.innerHTML = 'Finalizar entrevista'; }
+      if (sendBtn) { sendBtn.disabled = false; }
+      if (input) { input.disabled = false; }
+      showNotification('Error al finalizar entrevista: ' + e.message, 'error');
+      addChatMessage('system-msg', 'Error al finalizar: ' + e.message);
     });
 }
 
@@ -1976,7 +2041,7 @@ function generateWithAI(pubId) {
       if (btn) { btn.disabled = false; btn.innerHTML = 'Generar con IA'; }
       return;
     }
-    showNotification('Generando imagen con ' + imageModel + '...', 'info');
+    showNotification('Generando imagen con ' + imageModel + '... (puede tardar 1-2 min si se descarga el modelo)', 'info');
     var url = apiUrl('/campaigns/' + state.activeCampaign.id + '/publications/' + pubId + '/generate-image');
     fetch(url, {
       method: 'POST',
@@ -1987,11 +2052,16 @@ function generateWithAI(pubId) {
       .then(function(data) {
         if (btn) { btn.disabled = false; btn.innerHTML = 'Generar con IA'; }
         if (data.image_url) {
-          // Mostrar imagen en el preview
+          // Construir URL absoluta con cache-busting para que el browser no use cache
+          var absUrl = window.location.origin + data.image_url;
+          // Actualizar preview dentro del modal (el contenedor tiene id fijo)
           var container = document.getElementById('pubPreviewImageContainer');
           if (container) {
-            container.innerHTML = '<img src="' + escapeHtml(data.image_url) + '" style="width:100%;height:100%;object-fit:cover;border-radius:8px" />';
+            container.innerHTML = '<img src="' + absUrl + '" style="width:100%;height:100%;object-fit:cover;border-radius:8px" onerror="this.parentNode.innerHTML=\'<span style=\'color:var(--danger)\'>Error al cargar imagen</span>\'" />';
           }
+          // Actualizar también la miniatura en el calendario si está visible
+          var calImg = document.querySelector('[data-pub-id="' + pubId + '"] .pub-cal-image');
+          if (calImg) { calImg.src = absUrl; }
           showNotification('Imagen generada correctamente', 'success');
         } else {
           showNotification(data.error || 'No se pudo generar la imagen', 'error');

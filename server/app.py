@@ -696,6 +696,113 @@ MENSAJE DEL USUARIO: {msg.message}"""
     }
 
 
+@app.post("/api/brands/{brand_id}/interview/finish")
+async def finish_interview(brand_id: str, session_id: Optional[str] = None):
+    """
+    Finaliza la entrevista de descubrimiento y dispara la actualización del ADN
+    con todos los insights recopilados en la sesión.
+    """
+    import time
+    start = time.time()
+
+    brand_file = DATA_DIR / "brands" / brand_id / "brand.json"
+    brand = load_json(brand_file)
+    if not brand:
+        raise HTTPException(status_code=404, detail="Marca no encontrada")
+
+    # Recopilar todos los mensajes de la sesión
+    session_messages = []
+    if session_id:
+        session_file = DATA_DIR / "sessions" / f"{brand_id}_{session_id}.json"
+        session = load_json(session_file, {})
+        session_messages = session.get("messages", [])
+    else:
+        # Buscar la sesión más reciente de esta marca
+        sessions_dir = DATA_DIR / "sessions"
+        brand_sessions = sorted(
+            sessions_dir.glob(f"{brand_id}_*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True
+        )
+        if brand_sessions:
+            session = load_json(brand_sessions[0], {})
+            session_messages = session.get("messages", [])
+            session_id = session.get("id", "unknown")
+
+    if not session_messages:
+        return {"status": "no_session", "message": "No se encontró sesión activa para esta marca"}
+
+    # Construir transcript completo
+    transcript = "\n".join([
+        f"{'Usuario' if m['role'] == 'user' else 'Agente'}: {m['content']}"
+        for m in session_messages
+    ])
+
+    # Cargar ADN borrador actual
+    adn_draft = load_json(DATA_DIR / "brands" / brand_id / "adn_draft.json", {})
+    adn_current = json.dumps(adn_draft.get("fields", {}), ensure_ascii=False)[:2000]
+
+    # Usar el agente analizador para actualizar el ADN con los insights de la entrevista
+    model = get_active_model()
+    system_prompt = get_system_prompt("brand_analyzer") or _get_default_analyzer_prompt()
+
+    user_message = (
+        f"Analiza la siguiente entrevista de descubrimiento de marca y actualiza el ADN empresarial.\n\n"
+        f"ADN ACTUAL:\n{adn_current}\n\n"
+        f"TRANSCRIPT DE LA ENTREVISTA:\n{transcript[:4000]}\n\n"
+        f"Extrae todos los insights relevantes y devuelve el ADN actualizado en JSON válido.\n"
+        f"Usa los mismos campos del ADN actual y agrega información nueva encontrada en la entrevista."
+    )
+
+    try:
+        result = call_ollama(model, system_prompt, user_message, temperature=0.3, timeout=180)
+        latency = int((time.time() - start) * 1000)
+
+        parsed = _parse_llm_json(result)
+        if parsed:
+            # Actualizar ADN con los nuevos insights
+            current_fields = adn_draft.get("fields", {})
+            for key, value in parsed.items():
+                if value:  # Solo actualizar campos con contenido
+                    current_fields[key] = value
+
+            adn_draft["fields"] = current_fields
+            adn_draft["updated_at"] = datetime.utcnow().isoformat()
+            adn_draft["interview_session_id"] = session_id
+            save_json(DATA_DIR / "brands" / brand_id / "adn_draft.json", adn_draft)
+
+            # Actualizar estado de la marca
+            brand["onboarding_status"] = "interviewing"
+            brand["updated_at"] = datetime.utcnow().isoformat()
+            save_json(brand_file, brand)
+
+            log_audit("brand_analyzer", "finish_interview",
+                      {"brand_id": brand_id, "session_id": session_id, "messages": len(session_messages)},
+                      result[:500], model, latency, True)
+
+            return {
+                "status": "finished",
+                "message": "Entrevista finalizada. El ADN ha sido actualizado con los insights recopilados.",
+                "adn_updated": True,
+                "message_count": len(session_messages),
+            }
+        else:
+            return {
+                "status": "finished",
+                "message": "Entrevista finalizada. No se pudieron extraer insights adicionales del transcript.",
+                "adn_updated": False,
+                "message_count": len(session_messages),
+            }
+    except Exception as e:
+        logger.error(f"Error al finalizar entrevista: {e}")
+        return {
+            "status": "finished",
+            "message": f"Entrevista finalizada (con error al actualizar ADN: {str(e)})",
+            "adn_updated": False,
+            "message_count": len(session_messages),
+        }
+
+
 def _get_default_interviewer_prompt() -> str:
     return """Eres un consultor experto en marketing y branding con 20 años de experiencia.
 Tu rol es conducir una entrevista de descubrimiento de marca para una PYME.
@@ -1084,18 +1191,76 @@ class GenerateImageRequest(BaseModel):
     instruction: Optional[str] = None
 
 
+def _ensure_model_available(model: str) -> dict:
+    """
+    Verifica si el modelo está disponible en Ollama.
+    Si no lo está, lo descarga automáticamente (ollama pull).
+    Retorna {"available": bool, "pulled": bool, "error": str|None}
+    """
+    try:
+        # Listar modelos disponibles
+        resp = requests.get(f"{OLLAMA_URL}/api/tags", timeout=10)
+        resp.raise_for_status()
+        tags = resp.json()
+        available_models = [m["name"] for m in tags.get("models", [])]
+
+        # Normalizar nombre: "x/z-image-turbo" puede aparecer como "z-image-turbo" o con tag
+        model_base = model.split(":")[0]  # sin tag :latest
+        model_found = any(
+            m.startswith(model_base) or m.startswith(model)
+            for m in available_models
+        )
+
+        if model_found:
+            return {"available": True, "pulled": False, "error": None}
+
+        # No está disponible — hacer pull
+        logger.info(f"Modelo {model} no encontrado. Iniciando descarga...")
+        pull_resp = requests.post(
+            f"{OLLAMA_URL}/api/pull",
+            json={"name": model, "stream": False},
+            timeout=600,  # 10 minutos para descargar
+        )
+        pull_resp.raise_for_status()
+        pull_data = pull_resp.json()
+        status = pull_data.get("status", "")
+        if "success" in status.lower() or status == "":
+            logger.info(f"Modelo {model} descargado correctamente")
+            return {"available": True, "pulled": True, "error": None}
+        else:
+            return {"available": False, "pulled": False, "error": f"Pull status: {status}"}
+
+    except requests.exceptions.ConnectionError:
+        return {"available": False, "pulled": False, "error": "Ollama no está disponible"}
+    except Exception as e:
+        return {"available": False, "pulled": False, "error": str(e)}
+
+
 @app.post("/api/campaigns/{campaign_id}/publications/{pub_id}/generate-image")
 async def generate_publication_image(campaign_id: str, pub_id: str, req: GenerateImageRequest):
-    """Genera una imagen para la publicación usando Ollama con modelo de imagen."""
-    import time, re
+    """Genera una imagen para la publicación usando Ollama con modelo de imagen.
+    Si el modelo no está disponible, lo descarga automáticamente antes de generar.
+    """
+    import time, base64
     start = time.time()
 
-    # Intentar generar imagen vía Ollama
     try:
+        # 1. Verificar y descargar el modelo si es necesario
+        model_status = _ensure_model_available(req.model)
+        if not model_status["available"]:
+            return {
+                "error": f"No se pudo preparar el modelo {req.model}: {model_status['error']}",
+                "success": False,
+            }
+        if model_status["pulled"]:
+            logger.info(f"Modelo {req.model} descargado exitosamente antes de generar")
+
+        # 2. Construir prompt
         prompt = req.image_prompt
         if req.instruction:
             prompt = f"{prompt}. Estilo adicional: {req.instruction}"
 
+        # 3. Llamar a Ollama para generar la imagen
         response = requests.post(
             f"{OLLAMA_URL}/api/generate",
             json={
@@ -1103,29 +1268,38 @@ async def generate_publication_image(campaign_id: str, pub_id: str, req: Generat
                 "prompt": prompt,
                 "stream": False,
             },
-            timeout=180,
+            timeout=300,
         )
         response.raise_for_status()
         data = response.json()
 
-        # Ollama devuelve imágenes en base64 en el campo 'images' o 'response'
+        # 4. Extraer imagen base64 (campo 'images' o 'response')
         image_b64 = None
         if "images" in data and data["images"]:
             image_b64 = data["images"][0]
         elif "response" in data and data["response"]:
-            # Algunos modelos de imagen devuelven base64 en response
-            image_b64 = data["response"]
+            # Algunos modelos de imagen devuelven base64 directamente en 'response'
+            candidate = data["response"].strip()
+            # Verificar si parece base64 (no texto normal)
+            if len(candidate) > 100 and not candidate.startswith('{'):
+                image_b64 = candidate
 
         if image_b64:
-            # Guardar imagen en disco
-            import base64
+            # 5. Guardar imagen en disco con timestamp para evitar caché
             img_dir = DATA_DIR / "exports" / "images"
             img_dir.mkdir(parents=True, exist_ok=True)
-            img_path = img_dir / f"{pub_id}.png"
+            ts = int(time.time())
+            img_filename = f"{pub_id}_{ts}.png"
+            img_path = img_dir / img_filename
             img_bytes = base64.b64decode(image_b64)
             img_path.write_bytes(img_bytes)
 
-            # Actualizar publicación con URL de imagen
+            # También guardar como nombre fijo (para referencia persistente)
+            fixed_path = img_dir / f"{pub_id}.png"
+            fixed_path.write_bytes(img_bytes)
+
+            # 6. Actualizar publicación con URL de imagen
+            image_url = f"/api/images/{pub_id}.png?t={ts}"
             for camp_dir in (DATA_DIR / "campaigns").iterdir():
                 if camp_dir.is_dir() and campaign_id in camp_dir.name:
                     plan_file = camp_dir / "plan.json"
@@ -1133,17 +1307,25 @@ async def generate_publication_image(campaign_id: str, pub_id: str, req: Generat
                     for pub in plan.get("publications", []):
                         if pub.get("id") == pub_id:
                             pub["generated_image_url"] = f"/api/images/{pub_id}.png"
+                            pub["updated_at"] = datetime.utcnow().isoformat()
                             save_json(plan_file, plan)
                             break
 
             latency = int((time.time() - start) * 1000)
             log_audit("image_generator", "generate_image",
                       {"campaign_id": campaign_id, "pub_id": pub_id, "model": req.model},
-                      f"Image generated: {pub_id}.png", req.model, latency, True)
+                      f"Image generated: {img_filename}", req.model, latency, True)
 
-            return {"image_url": f"/api/images/{pub_id}.png", "success": True}
+            return {"image_url": image_url, "success": True}
         else:
-            return {"error": f"El modelo {req.model} no retornó una imagen. Verifica que esté instalado en Ollama.", "success": False}
+            return {
+                "error": (
+                    f"El modelo {req.model} no retornó una imagen. "
+                    "Este modelo puede no soportar generación de imágenes vía Ollama. "
+                    "Verifica que sea un modelo de imagen compatible (ej: x/z-image-turbo, x/flux2-klein)."
+                ),
+                "success": False,
+            }
 
     except requests.exceptions.ConnectionError:
         return {"error": "Ollama no está disponible", "success": False}
