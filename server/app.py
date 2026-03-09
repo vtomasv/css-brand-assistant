@@ -17,6 +17,7 @@ import uuid
 import shutil
 import asyncio
 import logging
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -45,6 +46,13 @@ DEFAULTS_DIR = BASE_DIR / "defaults"
 
 PORT = int(os.environ.get("PORT", 7860))
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+
+# ---------------------------------------------------------------------------
+# Estado global de descargas de modelos en progreso
+# Clave: nombre del modelo, Valor: dict con status/progress/error
+# ---------------------------------------------------------------------------
+_pull_status: Dict[str, Dict] = {}  # {model: {status, progress, error, started_at}}
+_pull_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -115,7 +123,8 @@ async def startup_event():
 
 async def _verify_and_fix_models():
     """Verifica que el modelo configurado existe en Ollama.
-    Si no existe, usa el mejor modelo disponible como fallback automático.
+    Si no existe, intenta descargarlo automáticamente (ollama pull).
+    Si Ollama no está disponible, lo ignora silenciosamente.
     """
     try:
         resp = requests.get(f"{OLLAMA_URL}/api/tags", timeout=5)
@@ -124,10 +133,6 @@ async def _verify_and_fix_models():
             return
 
         available_models = [m["name"] for m in resp.json().get("models", [])]
-        if not available_models:
-            logger.warning("Ollama está corriendo pero no tiene modelos descargados")
-            return
-
         logger.info(f"Modelos disponibles en Ollama: {available_models}")
 
         # Leer modelo configurado
@@ -146,54 +151,108 @@ async def _verify_and_fix_models():
             logger.info(f"Modelo configurado '{configured_model}' disponible ✓")
             return
 
-        # El modelo no está disponible → elegir el mejor disponible como fallback
-        # Orden de preferencia: modelos más capaces primero
-        PREFERRED_ORDER = [
-            "llama3.1:8b", "llama3.1:70b", "llama3.2:3b", "llama3.2:1b",
-            "llama3:8b", "llama3:70b", "mistral:7b", "mistral",
-            "gemma3:4b", "gemma3:12b", "gemma2:9b", "phi3:mini",
-            "qwen2.5:7b", "qwen2:7b", "deepseek-r1:8b",
-        ]
-
-        fallback_model = None
-        for preferred in PREFERRED_ORDER:
-            preferred_base = preferred.split(":")[0]
-            for available in available_models:
-                if available == preferred or available.startswith(preferred_base + ":"):
-                    fallback_model = available
-                    break
-            if fallback_model:
-                break
-
-        # Si no está en la lista de preferidos, usar el primero disponible
-        if not fallback_model:
-            fallback_model = available_models[0]
-
-        logger.warning(
-            f"Modelo '{configured_model}' no encontrado. "
-            f"Usando fallback automático: '{fallback_model}'"
+        # El modelo no está disponible → intentar descargarlo en background
+        logger.info(
+            f"Modelo '{configured_model}' no encontrado en Ollama. "
+            f"Iniciando descarga automática en background..."
         )
-
-        # Actualizar config con el modelo disponible
-        config["default_model"] = fallback_model
-        config["model_fallback_from"] = configured_model
-        config["model_fallback_at"] = datetime.utcnow().isoformat()
-        save_json(config_file, config)
-
-        # Actualizar también el modelo en todos los agentes que usaban el modelo anterior
-        agents_file = DATA_DIR / "agents" / "agents.json"
-        agents_data = load_json(agents_file, {"agents": []})
-        updated = False
-        for agent in agents_data.get("agents", []):
-            if agent.get("model", "") == configured_model:
-                agent["model"] = fallback_model
-                updated = True
-        if updated:
-            save_json(agents_file, agents_data)
-            logger.info(f"Agentes actualizados para usar modelo '{fallback_model}'")
+        _start_pull_background(configured_model)
 
     except Exception as e:
         logger.warning(f"No se pudo verificar modelos al inicio: {e}")
+
+
+def _is_model_available(model: str) -> bool:
+    """Comprueba rápidamente si un modelo ya está descargado en Ollama."""
+    try:
+        resp = requests.get(f"{OLLAMA_URL}/api/tags", timeout=5)
+        if resp.status_code != 200:
+            return False
+        available = [m["name"] for m in resp.json().get("models", [])]
+        model_base = model.split(":")[0]
+        return any(
+            m == model or m.startswith(model_base + ":")
+            for m in available
+        )
+    except Exception:
+        return False
+
+
+def _start_pull_background(model: str) -> None:
+    """Lanza la descarga de un modelo Ollama en un hilo background.
+    Actualiza _pull_status con el progreso para que el frontend pueda consultarlo.
+    Si ya hay una descarga en curso para ese modelo, no lanza otra.
+    """
+    with _pull_lock:
+        existing = _pull_status.get(model, {})
+        if existing.get("status") in ("pulling", "queued"):
+            logger.info(f"Descarga de '{model}' ya en curso, no se lanza otra")
+            return
+        _pull_status[model] = {
+            "status": "queued",
+            "progress": 0,
+            "error": None,
+            "started_at": datetime.utcnow().isoformat(),
+            "completed_at": None,
+        }
+
+    def _do_pull():
+        with _pull_lock:
+            _pull_status[model]["status"] = "pulling"
+        logger.info(f"[pull] Iniciando descarga de modelo: {model}")
+        try:
+            # Usar stream=True para poder reportar progreso
+            pull_resp = requests.post(
+                f"{OLLAMA_URL}/api/pull",
+                json={"name": model, "stream": True},
+                stream=True,
+                timeout=1800,  # 30 minutos máximo
+            )
+            pull_resp.raise_for_status()
+
+            last_progress = 0
+            for raw_line in pull_resp.iter_lines():
+                if not raw_line:
+                    continue
+                try:
+                    chunk = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    continue
+
+                status_msg = chunk.get("status", "")
+                total = chunk.get("total", 0)
+                completed = chunk.get("completed", 0)
+
+                if total and total > 0:
+                    pct = int(completed * 100 / total)
+                    if pct != last_progress:
+                        last_progress = pct
+                        with _pull_lock:
+                            _pull_status[model]["progress"] = pct
+                            _pull_status[model]["status_msg"] = status_msg
+
+                if "error" in chunk:
+                    raise RuntimeError(chunk["error"])
+
+                if status_msg == "success":
+                    break
+
+            with _pull_lock:
+                _pull_status[model]["status"] = "done"
+                _pull_status[model]["progress"] = 100
+                _pull_status[model]["completed_at"] = datetime.utcnow().isoformat()
+            logger.info(f"[pull] Modelo '{model}' descargado correctamente")
+
+        except Exception as exc:
+            with _pull_lock:
+                _pull_status[model]["status"] = "error"
+                _pull_status[model]["error"] = str(exc)
+                _pull_status[model]["completed_at"] = datetime.utcnow().isoformat()
+            logger.error(f"[pull] Error descargando modelo '{model}': {exc}")
+
+    t = threading.Thread(target=_do_pull, daemon=True, name=f"pull-{model}")
+    t.start()
+
 
 # ---------------------------------------------------------------------------
 # Utilidades de persistencia
@@ -279,13 +338,37 @@ def call_ollama(model: str, system_prompt: str, user_message: str,
                     timeout=timeout,
                 )
                 if response.status_code == 404:
-                    # /api/chat no existe → fallback a /api/generate
-                    logger.warning("Ollama: /api/chat devolvió 404, usando /api/generate como fallback")
-                    _ollama_api_endpoint = "generate"
+                    # Puede ser que /api/chat no exista (Ollama antiguo)
+                    # o que el modelo no esté descargado.
+                    # Distinguimos por el body de la respuesta.
+                    try:
+                        err_body = response.json()
+                        err_msg = err_body.get("error", "").lower()
+                    except Exception:
+                        err_msg = ""
+
+                    if "model" in err_msg and ("not found" in err_msg or "pull" in err_msg):
+                        # El modelo no está descargado → auto-pull
+                        logger.warning(f"Ollama /api/chat: modelo '{model}' no encontrado. Iniciando descarga...")
+                        _start_pull_background(model)
+                        raise HTTPException(
+                            status_code=503,
+                            detail=(
+                                f"El modelo '{model}' no está descargado todavía. "
+                                f"Se ha iniciado la descarga automática en background. "
+                                f"Consulta el estado en Agentes IA o espera unos minutos e intenta de nuevo."
+                            )
+                        )
+                    else:
+                        # /api/chat no existe en esta versión de Ollama → fallback a /api/generate
+                        logger.warning("Ollama: /api/chat devolvió 404, usando /api/generate como fallback")
+                        _ollama_api_endpoint = "generate"
                 else:
                     response.raise_for_status()
                     _ollama_api_endpoint = "chat"
                     return response.json()["message"]["content"]
+            except HTTPException:
+                raise
             except requests.exceptions.HTTPError as e:
                 if "404" in str(e):
                     logger.warning("Ollama: /api/chat no disponible, usando /api/generate")
@@ -309,30 +392,16 @@ def call_ollama(model: str, system_prompt: str, user_message: str,
             )
             if response.status_code == 404:
                 # 404 en /api/generate = modelo no descargado
-                logger.error(f"Modelo '{model}' no encontrado en Ollama. Ejecuta: ollama pull {model}")
-                # Listar modelos disponibles para ayudar al diagnóstico
-                try:
-                    tags = requests.get(f"{OLLAMA_URL}/api/tags", timeout=5).json()
-                    available = [m["name"] for m in tags.get("models", [])]
-                    logger.info(f"Modelos disponibles en Ollama: {available}")
-                    if available:
-                        raise HTTPException(
-                            status_code=503,
-                            detail=f"Modelo '{model}' no está descargado. Modelos disponibles: {', '.join(available)}. "
-                                   f"Ve a Agentes IA para cambiar el modelo, o ejecuta: ollama pull {model}"
-                        )
-                    else:
-                        raise HTTPException(
-                            status_code=503,
-                            detail=f"No hay modelos descargados en Ollama. Ejecuta en terminal: ollama pull {model}"
-                        )
-                except HTTPException:
-                    raise
-                except Exception:
-                    raise HTTPException(
-                        status_code=503,
-                        detail=f"Modelo '{model}' no encontrado. Ejecuta: ollama pull {model}"
+                logger.warning(f"Modelo '{model}' no encontrado en Ollama. Iniciando descarga automática...")
+                _start_pull_background(model)
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        f"El modelo '{model}' no está descargado todavía. "
+                        f"Se ha iniciado la descarga automática en background. "
+                        f"Consulta el estado en Agentes IA o espera unos minutos e intenta de nuevo."
                     )
+                )
             response.raise_for_status()
             return response.json().get("response", "")
 
@@ -459,6 +528,81 @@ def ollama_status():
         return {"available": True, "models": models}
     except Exception:
         return {"available": False, "models": []}
+
+
+@app.post("/api/models/pull")
+def pull_model_endpoint(body: dict):
+    """Inicia la descarga de un modelo Ollama en background.
+    Body: {"model": "llama3.2:3b"}
+    Retorna inmediatamente con el estado inicial de la descarga.
+    """
+    model = body.get("model", "").strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="Se requiere el campo 'model'")
+
+    # Si ya está disponible, no hace falta descargar
+    if _is_model_available(model):
+        return {
+            "model": model,
+            "status": "already_available",
+            "message": f"El modelo '{model}' ya está disponible en Ollama.",
+        }
+
+    # Iniciar descarga en background
+    _start_pull_background(model)
+    with _pull_lock:
+        status_info = _pull_status.get(model, {})
+
+    return {
+        "model": model,
+        "status": status_info.get("status", "queued"),
+        "message": f"Descarga de '{model}' iniciada en background. Consulta /api/models/pull/{model}/status para el progreso.",
+        "pull_info": status_info,
+    }
+
+
+@app.get("/api/models/pull/{model_name:path}/status")
+def pull_model_status_endpoint(model_name: str):
+    """Consulta el estado de la descarga de un modelo.
+    Retorna: {status: queued|pulling|done|error, progress: 0-100, error: str|null}
+    """
+    with _pull_lock:
+        info = _pull_status.get(model_name, None)
+
+    if info is None:
+        # Verificar si ya está disponible aunque no haya registro de pull
+        if _is_model_available(model_name):
+            return {
+                "model": model_name,
+                "status": "available",
+                "progress": 100,
+                "error": None,
+                "message": f"El modelo '{model_name}' está disponible.",
+            }
+        return {
+            "model": model_name,
+            "status": "not_started",
+            "progress": 0,
+            "error": None,
+            "message": f"No hay descarga en curso para '{model_name}'.",
+        }
+
+    return {
+        "model": model_name,
+        "status": info.get("status"),
+        "progress": info.get("progress", 0),
+        "status_msg": info.get("status_msg", ""),
+        "error": info.get("error"),
+        "started_at": info.get("started_at"),
+        "completed_at": info.get("completed_at"),
+    }
+
+
+@app.get("/api/models/pull/all")
+def pull_all_status():
+    """Retorna el estado de todas las descargas de modelos en curso o completadas."""
+    with _pull_lock:
+        return {"pulls": dict(_pull_status)}
 
 
 # ---------------------------------------------------------------------------
@@ -1874,7 +2018,10 @@ def list_agents():
 
 @app.put("/api/agents/{agent_id}")
 def update_agent(agent_id: str, update: AgentConfigUpdate):
-    """Actualiza la configuración de un agente."""
+    """Actualiza la configuración de un agente.
+    Si se cambia el modelo y éste no está disponible en Ollama,
+    inicia la descarga automática en background.
+    """
     agents_file = DATA_DIR / "agents" / "agents.json"
     agents_data = load_json(agents_file, {"agents": []})
 
@@ -1886,11 +2033,31 @@ def update_agent(agent_id: str, update: AgentConfigUpdate):
                 prompt_file.write_text(update.system_prompt, encoding="utf-8")
                 agent["system_prompt"] = update.system_prompt
             if update.model is not None:
-                agent["model"] = update.model
+                old_model = agent.get("model", "")
+                new_model = update.model
+                agent["model"] = new_model
+
+                # Si el modelo cambio, verificar si está disponible y descargarlo si no
+                if new_model != old_model:
+                    if not _is_model_available(new_model):
+                        logger.info(
+                            f"Agente '{agent_id}': modelo '{new_model}' no disponible. "
+                            f"Iniciando descarga automática..."
+                        )
+                        _start_pull_background(new_model)
+                        agent["model_pull_status"] = "pulling"
+                    else:
+                        agent["model_pull_status"] = "available"
+
             if update.temperature is not None:
                 agent["temperature"] = update.temperature
             agent["updated_at"] = datetime.utcnow().isoformat()
             save_json(agents_file, agents_data)
+
+            # Incluir estado de descarga en la respuesta
+            with _pull_lock:
+                pull_info = _pull_status.get(agent.get("model", ""), {})
+            agent["pull_status"] = pull_info if pull_info else None
             return agent
 
     raise HTTPException(status_code=404, detail="Agente no encontrado")

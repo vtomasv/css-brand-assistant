@@ -2565,15 +2565,19 @@ function saveSkillContent(agentId, skillName) {
     });
 }
 
+// Mapa de intervalos de polling de descarga activos: {model: intervalId}
+var _pullPollingIntervals = {};
+
 function saveAgentPrompt(agentId) {
   var promptEl = document.getElementById('prompt_' + agentId);
-  var modelEl = document.getElementById('model_' + agentId);
-  var tempEl = document.getElementById('temp_' + agentId);
+  var modelEl  = document.getElementById('model_' + agentId);
+  var tempEl   = document.getElementById('temp_' + agentId);
   if (!promptEl) return;
 
-  var payload = {agent_id: agentId, system_prompt: promptEl.value};
-  if (modelEl) payload.model = modelEl.value;
-  if (tempEl) payload.temperature = parseFloat(tempEl.value) || 0.7;
+  var newModel = modelEl ? modelEl.value.trim() : '';
+  var payload  = {agent_id: agentId, system_prompt: promptEl.value};
+  if (modelEl)  payload.model       = newModel;
+  if (tempEl)   payload.temperature = parseFloat(tempEl.value) || 0.7;
 
   fetch(apiUrl('/agents/' + agentId), {
     method: 'PUT',
@@ -2581,12 +2585,102 @@ function saveAgentPrompt(agentId) {
     body: JSON.stringify(payload),
   })
     .then(function(r) { return r.json(); })
-    .then(function() {
-      showNotification('Agente "' + agentId + '" actualizado correctamente', 'success');
+    .then(function(data) {
+      var pullStatus = data.pull_status;
+      if (pullStatus && (pullStatus.status === 'pulling' || pullStatus.status === 'queued')) {
+        // El modelo se está descargando — mostrar notificación persistente y polling
+        showNotification(
+          '&#8987; Descargando modelo <strong>' + escapeHtml(newModel) + '</strong>... ' +
+          'Esto puede tardar varios minutos. El agente estará listo cuando termine.',
+          'info'
+        );
+        _startPullPolling(agentId, newModel);
+      } else if (data.model_pull_status === 'pulling') {
+        // Alternativa: campo en el agente
+        showNotification(
+          '&#8987; Descargando modelo <strong>' + escapeHtml(newModel) + '</strong>... ' +
+          'Esto puede tardar varios minutos.',
+          'info'
+        );
+        _startPullPolling(agentId, newModel);
+      } else {
+        showNotification('Agente "' + agentId + '" actualizado correctamente', 'success');
+      }
     })
     .catch(function(e) {
       showNotification('Error: ' + e.message, 'error');
     });
+}
+
+/**
+ * Inicia un polling periódico para consultar el estado de descarga de un modelo.
+ * Muestra una barra de progreso en el campo del modelo del agente.
+ * Se detiene cuando la descarga termina (done/error) o el modelo ya está disponible.
+ */
+function _startPullPolling(agentId, model) {
+  // Cancelar polling previo para este agente si existe
+  if (_pullPollingIntervals[agentId]) {
+    clearInterval(_pullPollingIntervals[agentId]);
+  }
+
+  // Mostrar indicador visual junto al campo del modelo
+  var modelEl = document.getElementById('model_' + agentId);
+  var pullIndicatorId = 'pullIndicator_' + agentId;
+  if (modelEl && !document.getElementById(pullIndicatorId)) {
+    var indicator = document.createElement('div');
+    indicator.id = pullIndicatorId;
+    indicator.style.cssText = 'margin-top:6px;font-size:11px;color:var(--accent);display:flex;align-items:center;gap:6px';
+    indicator.innerHTML = '<span style="animation:spin 1s linear infinite;display:inline-block">&#9696;</span>' +
+                          '<span id="pullIndicatorText_' + agentId + '">Iniciando descarga de ' + escapeHtml(model) + '...</span>' +
+                          '<div style="flex:1;height:4px;background:var(--border);border-radius:2px;overflow:hidden">' +
+                          '<div id="pullBar_' + agentId + '" style="height:100%;width:0%;background:var(--accent);transition:width 0.5s"></div>' +
+                          '</div>';
+    modelEl.parentNode.appendChild(indicator);
+  }
+
+  var intervalId = setInterval(function() {
+    fetch(apiUrl('/models/pull/' + encodeURIComponent(model) + '/status'))
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var status   = data.status || 'unknown';
+        var progress = data.progress || 0;
+        var statusMsg = data.status_msg || '';
+
+        // Actualizar barra de progreso
+        var bar  = document.getElementById('pullBar_' + agentId);
+        var text = document.getElementById('pullIndicatorText_' + agentId);
+        if (bar)  bar.style.width  = progress + '%';
+        if (text) {
+          if (status === 'pulling') {
+            text.textContent = 'Descargando ' + model + '... ' + progress + '%' + (statusMsg ? ' (' + statusMsg + ')' : '');
+          } else if (status === 'done' || status === 'available') {
+            text.textContent = '\u2713 Modelo ' + model + ' listo';
+          } else if (status === 'error') {
+            text.textContent = '\u2717 Error al descargar ' + model + ': ' + (data.error || 'desconocido');
+          }
+        }
+
+        if (status === 'done' || status === 'available') {
+          clearInterval(_pullPollingIntervals[agentId]);
+          delete _pullPollingIntervals[agentId];
+          showNotification('\u2713 Modelo <strong>' + escapeHtml(model) + '</strong> descargado y listo para usar.', 'success');
+          // Remover indicador después de 3 segundos
+          setTimeout(function() {
+            var ind = document.getElementById(pullIndicatorId);
+            if (ind) ind.parentNode.removeChild(ind);
+          }, 3000);
+        } else if (status === 'error') {
+          clearInterval(_pullPollingIntervals[agentId]);
+          delete _pullPollingIntervals[agentId];
+          showNotification('\u2717 Error al descargar modelo <strong>' + escapeHtml(model) + '</strong>: ' + (data.error || 'desconocido'), 'error');
+        }
+      })
+      .catch(function() {
+        // Error de red — ignorar y seguir intentando
+      });
+  }, 3000); // polling cada 3 segundos
+
+  _pullPollingIntervals[agentId] = intervalId;
 }
 
 // ============================================================
