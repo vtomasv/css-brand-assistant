@@ -1004,10 +1004,15 @@ def update_publication(campaign_id: str, pub_id: str, update: PublicationUpdate)
 
 @app.post("/api/campaigns/{campaign_id}/publications/{pub_id}/regenerate")
 async def regenerate_publication(campaign_id: str, pub_id: str,
-                                  instruction: Optional[str] = None):
-    """Regenera una publicación con instrucción opcional (más formal, más corto, etc.)."""
-    import time
+                                  instruction: Optional[str] = None,
+                                  language: Optional[str] = None):
+    """Regenera una publicación con instrucción y/o idioma opcionales."""
+    import time, re
     start = time.time()
+
+    lang_label = {
+        "es": "español", "en": "English", "pt": "português"
+    }.get(language or "es", "español")
 
     for camp_dir in (DATA_DIR / "campaigns").iterdir():
         if camp_dir.is_dir() and campaign_id in camp_dir.name:
@@ -1017,7 +1022,6 @@ async def regenerate_publication(campaign_id: str, pub_id: str,
 
             for pub in plan.get("publications", []):
                 if pub.get("id") == pub_id:
-                    # Cargar ADN de la marca
                     brand_id = camp.get("brand_id")
                     adn = load_json(DATA_DIR / "brands" / brand_id / "adn.json") or \
                           load_json(DATA_DIR / "brands" / brand_id / "adn_draft.json", {})
@@ -1026,19 +1030,18 @@ async def regenerate_publication(campaign_id: str, pub_id: str,
                     model = get_active_model()
                     system_prompt = get_system_prompt("content_writer") or _get_content_writer_prompt()
 
-                    user_message = f"""Regenera esta publicación para {pub.get('channel')}:
-
-PUBLICACIÓN ACTUAL:
-{pub.get('text', '')}
-
-ETAPA DE CAMPAÑA: {pub.get('stage', '')}
-OBJETIVO: {pub.get('objective', '')}
-INSTRUCCIÓN ADICIONAL: {instruction or 'Mejora la publicación manteniendo el ADN de marca'}
-
-ADN DE MARCA:
-{adn_summary}
-
-Genera: texto del post, hashtags y prompt de imagen. Responde en JSON."""
+                    user_message = (
+                        f"Regenera esta publicación para {pub.get('channel')}:\n\n"
+                        f"PUBLICACIÓN ACTUAL:\n{pub.get('text', '')}\n\n"
+                        f"ETAPA: {pub.get('stage', '')}\n"
+                        f"OBJETIVO: {pub.get('objective', '')}\n"
+                        f"INSTRUCCIÓN: {instruction or 'Mejora la publicación manteniendo el ADN de marca'}\n"
+                        f"IDIOMA DE SALIDA: {lang_label}\n\n"
+                        f"ADN DE MARCA:\n{adn_summary}\n\n"
+                        f"IMPORTANTE: Responde SOLO con JSON válido, sin bloques de código markdown, "
+                        f"sin texto adicional antes ni después del JSON.\n"
+                        f'Formato: {{"texto_del_post": "...", "hashtags": ["#tag1"], "cta": "...", "image_prompt": "..."}}'
+                    )
 
                     result = call_ollama(model, system_prompt, user_message, temperature=0.8)
                     latency = int((time.time() - start) * 1000)
@@ -1051,19 +1054,17 @@ Genera: texto del post, hashtags y prompt de imagen. Responde en JSON."""
                         "regenerated_at": datetime.utcnow().isoformat(),
                     })
 
-                    # Actualizar con nueva versión
-                    import re
-                    json_match = re.search(r'\{.*\}', result, re.DOTALL)
-                    if json_match:
-                        try:
-                            new_content = json.loads(json_match.group())
-                            pub["text"] = new_content.get("text", result)
-                            pub["hashtags"] = new_content.get("hashtags", pub.get("hashtags", []))
-                            pub["image_prompt"] = new_content.get("image_prompt", pub.get("image_prompt"))
-                        except json.JSONDecodeError:
-                            pub["text"] = result
+                    # Parsear JSON limpio (elimina bloques ```json ... ``` si existen)
+                    parsed = _parse_llm_json(result)
+                    if parsed:
+                        # Soportar tanto 'text' como 'texto_del_post'
+                        pub["text"] = parsed.get("text") or parsed.get("texto_del_post") or pub.get("text", "")
+                        pub["hashtags"] = parsed.get("hashtags", pub.get("hashtags", []))
+                        pub["cta"] = parsed.get("cta", pub.get("cta", ""))
+                        pub["image_prompt"] = parsed.get("image_prompt", pub.get("image_prompt", ""))
                     else:
-                        pub["text"] = result
+                        # Si no hay JSON válido, usar el texto limpio directamente
+                        pub["text"] = _strip_markdown_fences(result)
 
                     pub["edit_status"] = "regenerated"
                     pub["updated_at"] = datetime.utcnow().isoformat()
@@ -1075,6 +1076,122 @@ Genera: texto del post, hashtags y prompt de imagen. Responde en JSON."""
                     return pub
 
     raise HTTPException(status_code=404, detail="Publicación no encontrada")
+
+
+class GenerateImageRequest(BaseModel):
+    image_prompt: str
+    model: str = "x/z-image-turbo"
+    instruction: Optional[str] = None
+
+
+@app.post("/api/campaigns/{campaign_id}/publications/{pub_id}/generate-image")
+async def generate_publication_image(campaign_id: str, pub_id: str, req: GenerateImageRequest):
+    """Genera una imagen para la publicación usando Ollama con modelo de imagen."""
+    import time, re
+    start = time.time()
+
+    # Intentar generar imagen vía Ollama
+    try:
+        prompt = req.image_prompt
+        if req.instruction:
+            prompt = f"{prompt}. Estilo adicional: {req.instruction}"
+
+        response = requests.post(
+            f"{OLLAMA_URL}/api/generate",
+            json={
+                "model": req.model,
+                "prompt": prompt,
+                "stream": False,
+            },
+            timeout=180,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        # Ollama devuelve imágenes en base64 en el campo 'images' o 'response'
+        image_b64 = None
+        if "images" in data and data["images"]:
+            image_b64 = data["images"][0]
+        elif "response" in data and data["response"]:
+            # Algunos modelos de imagen devuelven base64 en response
+            image_b64 = data["response"]
+
+        if image_b64:
+            # Guardar imagen en disco
+            import base64
+            img_dir = DATA_DIR / "exports" / "images"
+            img_dir.mkdir(parents=True, exist_ok=True)
+            img_path = img_dir / f"{pub_id}.png"
+            img_bytes = base64.b64decode(image_b64)
+            img_path.write_bytes(img_bytes)
+
+            # Actualizar publicación con URL de imagen
+            for camp_dir in (DATA_DIR / "campaigns").iterdir():
+                if camp_dir.is_dir() and campaign_id in camp_dir.name:
+                    plan_file = camp_dir / "plan.json"
+                    plan = load_json(plan_file, {"publications": []})
+                    for pub in plan.get("publications", []):
+                        if pub.get("id") == pub_id:
+                            pub["generated_image_url"] = f"/api/images/{pub_id}.png"
+                            save_json(plan_file, plan)
+                            break
+
+            latency = int((time.time() - start) * 1000)
+            log_audit("image_generator", "generate_image",
+                      {"campaign_id": campaign_id, "pub_id": pub_id, "model": req.model},
+                      f"Image generated: {pub_id}.png", req.model, latency, True)
+
+            return {"image_url": f"/api/images/{pub_id}.png", "success": True}
+        else:
+            return {"error": f"El modelo {req.model} no retornó una imagen. Verifica que esté instalado en Ollama.", "success": False}
+
+    except requests.exceptions.ConnectionError:
+        return {"error": "Ollama no está disponible", "success": False}
+    except Exception as e:
+        logger.error(f"Error generando imagen: {e}")
+        return {"error": str(e), "success": False}
+
+
+@app.get("/api/images/{filename}")
+def serve_generated_image(filename: str):
+    """Sirve imágenes generadas por IA."""
+    img_path = DATA_DIR / "exports" / "images" / filename
+    if not img_path.exists():
+        raise HTTPException(status_code=404, detail="Imagen no encontrada")
+    return FileResponse(str(img_path), media_type="image/png")
+
+
+def _parse_llm_json(text: str) -> Optional[dict]:
+    """Extrae y parsea JSON de la respuesta del LLM, eliminando bloques markdown."""
+    import re
+    # Eliminar bloques ```json ... ``` o ``` ... ```
+    cleaned = re.sub(r'```(?:json)?\s*', '', text)
+    cleaned = re.sub(r'```\s*', '', cleaned)
+    cleaned = cleaned.strip()
+
+    # Intentar parsear directamente
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    # Buscar el primer objeto JSON válido en el texto
+    match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', cleaned, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group())
+        except json.JSONDecodeError:
+            pass
+
+    return None
+
+
+def _strip_markdown_fences(text: str) -> str:
+    """Elimina bloques de código markdown del texto."""
+    import re
+    cleaned = re.sub(r'```(?:json)?\s*', '', text)
+    cleaned = re.sub(r'```\s*', '', cleaned)
+    return cleaned.strip()
 
 
 def _get_content_writer_prompt() -> str:

@@ -934,7 +934,7 @@
   <div class="modal" style="max-width:800px">
     <div class="modal-header">
       <div class="modal-title" id="pubEditorTitle">Editar Publicación</div>
-      <button class="modal-close" onclick="closeModal('modalPubEditor')">&#10005;</button>
+      <button class="modal-close" onclick="closePubEditorNoSave()">&#10005;</button>
     </div>
     <div class="pub-editor" id="pubEditorContent">
     </div>
@@ -1818,6 +1818,10 @@ function openPubEditor(pubId) {
     });
 }
 
+function closePubEditorNoSave() {
+  closeModal('modalPubEditor');
+}
+
 function renderPubEditor(pub) {
   document.getElementById('pubEditorTitle').textContent = 'Editar — ' + (pub.channel || '') + ' — ' + (pub.stage || '');
 
@@ -1833,7 +1837,14 @@ function renderPubEditor(pub) {
   html += '<div><div class="pub-preview-name">' + escapeHtml(state.activeBrand ? state.activeBrand.name : 'Tu Marca') + '</div>';
   html += '<div class="pub-preview-handle">@tumarca</div></div>';
   html += '</div>';
-  html += '<div class="pub-preview-image">&#9670; Imagen del post</div>';
+  // Imagen generada o placeholder
+  html += '<div class="pub-preview-image" id="pubPreviewImageContainer" style="position:relative;overflow:hidden">';
+  if (pub.generated_image_url) {
+    html += '<img src="' + escapeHtml(pub.generated_image_url) + '" style="width:100%;height:100%;object-fit:cover;border-radius:8px" />';
+  } else {
+    html += '<span id="pubPreviewImagePlaceholder">&#9670; Imagen del post</span>';
+  }
+  html += '</div>';
   html += '<div class="pub-preview-text" id="previewText">' + escapeHtml(pub.text || '') + '</div>';
   html += '<div class="pub-preview-hashtags" id="previewHashtags">' + escapeHtml(hashtags) + '</div>';
   html += '</div>';
@@ -1850,6 +1861,38 @@ function renderPubEditor(pub) {
   html += '<input type="text" id="editPubCTA" value="' + escapeHtml(pub.cta || '') + '" /></div>';
   html += '<div class="form-group"><label>Prompt de imagen</label>';
   html += '<textarea id="editPubImagePrompt" style="min-height:60px">' + escapeHtml(pub.image_prompt || '') + '</textarea></div>';
+
+  // ── Sección de generación de imagen con IA ──
+  html += '<div style="background:var(--bg-base);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px">';
+  html += '<div style="font-size:12px;font-weight:700;color:var(--text-main);margin-bottom:10px">Generación con IA</div>';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">';
+  // Selector: qué generar
+  html += '<div><label style="font-size:11px">¿Qué generar?</label>';
+  html += '<select id="editGenTarget" style="font-size:12px">';
+  html += '<option value="text">Texto del post</option>';
+  html += '<option value="image">Imagen del post</option>';
+  html += '</select></div>';
+  // Selector: modelo de imagen
+  html += '<div><label style="font-size:11px">Modelo de imagen</label>';
+  html += '<select id="editImageModel" style="font-size:12px">';
+  html += '<option value="x/z-image-turbo">z-image-turbo (rápido)</option>';
+  html += '<option value="x/flux2-klein">flux2-klein (alta calidad)</option>';
+  html += '</select></div>';
+  html += '</div>';
+  // Instrucción libre
+  html += '<div style="margin-bottom:10px"><label style="font-size:11px">Instrucción adicional (opcional)</label>';
+  html += '<input type="text" id="editGenInstruction" placeholder="Ej: más formal, más corto, estilo minimalista..." style="font-size:12px" /></div>';
+  // Selector de idioma
+  html += '<div style="margin-bottom:10px"><label style="font-size:11px">Idioma de generación</label>';
+  html += '<select id="editGenLanguage" style="font-size:12px">';
+  html += '<option value="es">Español</option>';
+  html += '<option value="en">English</option>';
+  html += '<option value="pt">Português</option>';
+  html += '</select></div>';
+  html += '<button class="btn btn-accent btn-sm" id="btnGenerate" onclick="generateWithAI(\'' + pub.id + '\')">Generar con IA</button>';
+  html += '</div>';
+  // ── fin sección IA ──
+
   html += '<div class="form-group"><label>Estado de publicación</label>';
   html += '<select id="editPubStatus">';
   var statuses = [{v:'pending',l:'Pendiente'},{v:'ready',l:'Lista para publicar'},{v:'published',l:'Publicada'},{v:'omitted',l:'Omitida'},{v:'rescheduled',l:'Reprogramada'}];
@@ -1859,7 +1902,6 @@ function renderPubEditor(pub) {
   html += '</select></div>';
   html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
   html += '<button class="btn btn-primary btn-sm" onclick="savePubEdits(\'' + pub.id + '\')">Guardar cambios</button>';
-  html += '<button class="btn btn-accent btn-sm" onclick="regeneratePub(\'' + pub.id + '\')">Regenerar con IA</button>';
   html += '<button class="btn btn-secondary btn-sm" onclick="copyPubText()">Copiar texto</button>';
   html += '</div>';
   html += '</div>';
@@ -1907,21 +1949,78 @@ function savePubEdits(pubId) {
 }
 
 function regeneratePub(pubId) {
-  var instruction = prompt('Instrucción para regenerar (opcional):\nEj: "más formal", "más corto", "más emocional"');
-  showNotification('Regenerando publicación con IA...', 'info');
+  // Mantenido por compatibilidad — ahora se usa generateWithAI()
+  generateWithAI(pubId);
+}
 
-  var url = apiUrl('/campaigns/' + state.activeCampaign.id + '/publications/' + pubId + '/regenerate');
-  if (instruction) url += '?instruction=' + encodeURIComponent(instruction);
+function generateWithAI(pubId) {
+  var targetEl = document.getElementById('editGenTarget');
+  var modelEl = document.getElementById('editImageModel');
+  var instrEl = document.getElementById('editGenInstruction');
+  var langEl = document.getElementById('editGenLanguage');
+  var btn = document.getElementById('btnGenerate');
 
-  fetch(url, {method: 'POST'})
-    .then(function(r) { return r.json(); })
-    .then(function(pub) {
-      showNotification('Publicación regenerada', 'success');
-      renderPubEditor(pub);
+  var target = targetEl ? targetEl.value : 'text';
+  var imageModel = modelEl ? modelEl.value : 'x/z-image-turbo';
+  var instruction = instrEl ? instrEl.value.trim() : '';
+  var language = langEl ? langEl.value : 'es';
+
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="loading-spinner"></span> Generando...'; }
+
+  if (target === 'image') {
+    // Generar imagen
+    var imagePrompt = document.getElementById('editPubImagePrompt');
+    var promptText = imagePrompt ? imagePrompt.value.trim() : '';
+    if (!promptText) {
+      showNotification('Escribe un prompt de imagen antes de generar', 'error');
+      if (btn) { btn.disabled = false; btn.innerHTML = 'Generar con IA'; }
+      return;
+    }
+    showNotification('Generando imagen con ' + imageModel + '...', 'info');
+    var url = apiUrl('/campaigns/' + state.activeCampaign.id + '/publications/' + pubId + '/generate-image');
+    fetch(url, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({image_prompt: promptText, model: imageModel, instruction: instruction}),
     })
-    .catch(function(e) {
-      showNotification('Error al regenerar: ' + e.message, 'error');
-    });
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (btn) { btn.disabled = false; btn.innerHTML = 'Generar con IA'; }
+        if (data.image_url) {
+          // Mostrar imagen en el preview
+          var container = document.getElementById('pubPreviewImageContainer');
+          if (container) {
+            container.innerHTML = '<img src="' + escapeHtml(data.image_url) + '" style="width:100%;height:100%;object-fit:cover;border-radius:8px" />';
+          }
+          showNotification('Imagen generada correctamente', 'success');
+        } else {
+          showNotification(data.error || 'No se pudo generar la imagen', 'error');
+        }
+      })
+      .catch(function(e) {
+        if (btn) { btn.disabled = false; btn.innerHTML = 'Generar con IA'; }
+        showNotification('Error al generar imagen: ' + e.message, 'error');
+      });
+  } else {
+    // Regenerar texto
+    showNotification('Regenerando texto con IA...', 'info');
+    var url2 = apiUrl('/campaigns/' + state.activeCampaign.id + '/publications/' + pubId + '/regenerate');
+    var params = [];
+    if (instruction) params.push('instruction=' + encodeURIComponent(instruction));
+    if (language) params.push('language=' + encodeURIComponent(language));
+    if (params.length > 0) url2 += '?' + params.join('&');
+    fetch(url2, {method: 'POST'})
+      .then(function(r) { return r.json(); })
+      .then(function(pub) {
+        if (btn) { btn.disabled = false; btn.innerHTML = 'Generar con IA'; }
+        showNotification('Texto regenerado correctamente', 'success');
+        renderPubEditor(pub);
+      })
+      .catch(function(e) {
+        if (btn) { btn.disabled = false; btn.innerHTML = 'Generar con IA'; }
+        showNotification('Error al regenerar: ' + e.message, 'error');
+      });
+  }
 }
 
 function copyPubText() {
