@@ -4,20 +4,20 @@
     {
       "method": "log",
       "params": {
-        "html": "<p>&#x25B6;&#xFE0F; Iniciando Ollama...</p>"
+        "html": "<p>&#x25B6;&#xFE0F; Iniciando Ollama en segundo plano...</p>"
       }
     },
     {
       "method": "shell.run",
       "params": {
-        "message": "{{platform === 'win32' ? 'start \"\" /B ollama serve 2>NUL' : 'ollama serve > /dev/null 2>&1 &'}}",
+        "message": "{{platform === 'win32' ? 'powershell -WindowStyle Hidden -Command \"$ollamaPath = (Get-Command ollama -ErrorAction SilentlyContinue).Source; if (-not $ollamaPath) { $ollamaPath = \\\"$env:LOCALAPPDATA\\\\Programs\\\\Ollama\\\\ollama.exe\\\" }; if (Test-Path $ollamaPath) { Start-Process -FilePath $ollamaPath -ArgumentList serve -WindowStyle Hidden -PassThru | Out-Null; Write-Host OLLAMA_STARTED } else { Write-Host OLLAMA_NOT_FOUND }\"' : 'ollama serve > /dev/null 2>&1 &'}}",
         "path": "{{cwd}}"
       }
     },
     {
       "method": "shell.run",
       "params": {
-        "message": "{{platform === 'win32' ? 'timeout /t 3 /nobreak > NUL' : 'sleep 3'}}",
+        "message": "{{platform === 'win32' ? 'powershell -Command \"Start-Sleep -Seconds 4\"' : 'sleep 4'}}",
         "path": "{{cwd}}"
       }
     },

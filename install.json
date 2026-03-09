@@ -10,26 +10,13 @@
     {
       "method": "log",
       "params": {
-        "html": "<p>&#x1F50D; Verificando Ollama...</p>"
+        "html": "<p>&#x1F50D; Verificando e instalando Ollama...</p>"
       }
     },
     {
       "method": "shell.run",
       "params": {
-        "message": "{{platform === 'win32' ? 'where ollama 2>NUL && echo OLLAMA_FOUND || echo OLLAMA_MISSING' : 'which ollama 2>/dev/null && echo OLLAMA_FOUND || echo OLLAMA_MISSING'}}"
-      }
-    },
-
-    {
-      "method": "log",
-      "params": {
-        "html": "<p>&#x2B07;&#xFE0F; Instalando Ollama (si no est&#xE1; instalado)...</p>"
-      }
-    },
-    {
-      "method": "shell.run",
-      "params": {
-        "message": "{{platform === 'win32' ? 'winget install --id Ollama.Ollama -e --accept-package-agreements --accept-source-agreements 2>NUL || (curl -L https://ollama.com/download/OllamaSetup.exe -o %TEMP%\\\\OllamaSetup.exe && %TEMP%\\\\OllamaSetup.exe /S)' : platform === 'darwin' ? 'which ollama || brew install ollama 2>/dev/null || curl -fsSL https://ollama.com/install.sh | sh' : 'which ollama || curl -fsSL https://ollama.com/install.sh | sh'}}"
+        "message": "{{platform === 'win32' ? 'powershell -Command \"$ollamaPath = (Get-Command ollama -ErrorAction SilentlyContinue).Source; if (-not $ollamaPath) { $ollamaPath = \\\"$env:LOCALAPPDATA\\\\Programs\\\\Ollama\\\\ollama.exe\\\" }; if (Test-Path $ollamaPath) { Write-Host OLLAMA_ALREADY_INSTALLED } else { Write-Host Descargando instalador de Ollama...; $installer = \\\"$env:TEMP\\\\OllamaSetup.exe\\\"; Invoke-WebRequest -Uri https://ollama.com/download/OllamaSetup.exe -OutFile $installer; Write-Host Instalando Ollama silenciosamente...; Start-Process -FilePath $installer -ArgumentList /S -Wait; Write-Host OLLAMA_INSTALLED }\"' : 'which ollama && echo OLLAMA_ALREADY_INSTALLED || (curl -fsSL https://ollama.com/install.sh | sh && echo OLLAMA_INSTALLED)'}}"
       }
     },
 
@@ -42,20 +29,20 @@
     {
       "method": "shell.run",
       "params": {
-        "message": "{{platform === 'win32' ? 'start \"\" /B ollama serve 2>NUL' : 'ollama serve > /dev/null 2>&1 &'}}"
+        "message": "{{platform === 'win32' ? 'powershell -WindowStyle Hidden -Command \"$ollamaPath = (Get-Command ollama -ErrorAction SilentlyContinue).Source; if (-not $ollamaPath) { $ollamaPath = \\\"$env:LOCALAPPDATA\\\\Programs\\\\Ollama\\\\ollama.exe\\\" }; if (Test-Path $ollamaPath) { Start-Process -FilePath $ollamaPath -ArgumentList serve -WindowStyle Hidden | Out-Null; Write-Host OLLAMA_STARTED } else { Write-Host OLLAMA_NOT_FOUND }\"' : 'ollama serve > /dev/null 2>&1 &'}}"
       }
     },
     {
       "method": "shell.run",
       "params": {
-        "message": "{{platform === 'win32' ? 'timeout /t 5 /nobreak > NUL' : 'sleep 5'}}"
+        "message": "{{platform === 'win32' ? 'powershell -Command \"Start-Sleep -Seconds 5\"' : 'sleep 5'}}"
       }
     },
 
     {
       "method": "log",
       "params": {
-        "html": "<p>&#x2B07;&#xFE0F; Descargando modelo de IA (puede tardar varios minutos seg&#xFA;n tu conexi&#xF3;n)...</p>"
+        "html": "<p>&#x2B07;&#xFE0F; Descargando modelo de IA (puede tardar varios minutos)...</p>"
       }
     },
     {
@@ -102,21 +89,14 @@
     {
       "method": "shell.run",
       "params": {
-        "message": "{{platform === 'win32' ? 'if not exist data\\\\agents mkdir data\\\\agents & if not exist data\\\\prompts\\\\system mkdir data\\\\prompts\\\\system & if not exist data\\\\sessions mkdir data\\\\sessions & if not exist data\\\\exports mkdir data\\\\exports & if not exist data\\\\brands mkdir data\\\\brands & if not exist data\\\\campaigns mkdir data\\\\campaigns & if not exist data\\\\audit mkdir data\\\\audit' : 'mkdir -p data/agents data/prompts/system data/sessions data/exports data/brands data/campaigns data/audit'}}",
+        "message": "{{platform === 'win32' ? 'powershell -Command \"@(\\\"data/agents\\\",\\\"data/prompts/system\\\",\\\"data/sessions\\\",\\\"data/exports\\\",\\\"data/brands\\\",\\\"data/campaigns\\\",\\\"data/audit\\\") | ForEach-Object { New-Item -ItemType Directory -Force -Path $_ | Out-Null }; Write-Host DIRS_OK\"' : 'mkdir -p data/agents data/prompts/system data/sessions data/exports data/brands data/campaigns data/audit'}}",
         "path": "{{cwd}}"
       }
     },
     {
       "method": "shell.run",
       "params": {
-        "message": "{{platform === 'win32' ? 'if not exist data\\\\agents\\\\agents.json copy defaults\\\\agents.json data\\\\agents\\\\agents.json' : 'cp defaults/agents.json data/agents/agents.json 2>/dev/null || true'}}",
-        "path": "{{cwd}}"
-      }
-    },
-    {
-      "method": "shell.run",
-      "params": {
-        "message": "{{platform === 'win32' ? 'for %f in (defaults\\\\prompts\\\\*.md) do if not exist data\\\\prompts\\\\system\\\\%~nxf copy \"%f\" data\\\\prompts\\\\system\\\\' : 'cp defaults/prompts/*.md data/prompts/system/ 2>/dev/null || true'}}",
+        "message": "{{platform === 'win32' ? 'powershell -Command \"if (-not (Test-Path data/agents/agents.json)) { Copy-Item defaults/agents.json data/agents/agents.json }; Get-ChildItem defaults/prompts/*.md | ForEach-Object { $dest = \\\"data/prompts/system/$($_.Name)\\\"; if (-not (Test-Path $dest)) { Copy-Item $_.FullName $dest } }; Write-Host DEFAULTS_OK\"' : 'cp defaults/agents.json data/agents/agents.json 2>/dev/null || true; cp defaults/prompts/*.md data/prompts/system/ 2>/dev/null || true'}}",
         "path": "{{cwd}}"
       }
     },
