@@ -1449,10 +1449,13 @@ async def generate_publication_image(campaign_id: str, pub_id: str, req: Generat
                       {"campaign_id": campaign_id, "pub_id": pub_id, "model": req.model},
                       f"Image generated: {img_filename} ({len(img_bytes)} bytes)", req.model, latency, True)
 
+            # Devolver base64 directamente para que el frontend pueda mostrar la imagen
+            # sin depender del endpoint de archivos (evita problemas de URL relativa/absoluta)
             return {
                 "image_url": image_url,
                 "image_filename": img_filename,
                 "image_size_bytes": len(img_bytes),
+                "image_b64": image_b64,  # base64 directo para mostrar como data:image/png;base64,...
                 "success": True,
             }
         else:

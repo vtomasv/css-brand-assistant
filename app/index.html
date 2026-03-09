@@ -2067,12 +2067,18 @@ function generateWithAI(pubId) {
       .then(function(r) { return r.json(); })
       .then(function(data) {
         if (btn) { btn.disabled = false; btn.innerHTML = 'Generar con IA'; }
-        if (data.image_url) {
-          // Construir URL absoluta con cache-busting
-          // data.image_url ya tiene ?t=timestamp, agregar uno nuevo por si acaso
-          var ts = Date.now();
-          var imgPath = data.image_url.split('?')[0];  // /api/images/pub_id.png
-          var absUrl = window.location.origin + imgPath + '?t=' + ts;
+        if (data.success && (data.image_b64 || data.image_url)) {
+          // Preferir base64 directo (evita problemas de URL relativa/absoluta y archivos)
+          var displaySrc;
+          if (data.image_b64) {
+            displaySrc = 'data:image/png;base64,' + data.image_b64;
+          } else {
+            // Fallback: URL absoluta con cache-busting
+            var ts = Date.now();
+            var imgPath = data.image_url.split('?')[0];
+            displaySrc = window.location.origin + imgPath + '?t=' + ts;
+          }
+
           // Actualizar preview dentro del modal
           var container = document.getElementById('pubPreviewImageContainer');
           if (container) {
@@ -2082,19 +2088,34 @@ function generateWithAI(pubId) {
               container.innerHTML = '<span style="color:#ef4444">Error al cargar imagen</span>';
             };
             img.onload = function() {
-              showNotification('Imagen generada correctamente', 'success');
+              showNotification('\u2705 Imagen generada correctamente', 'success');
             };
-            img.src = absUrl;
+            img.src = displaySrc;
             container.innerHTML = '';
             container.appendChild(img);
           }
+
+          // Guardar URL en el estado local del pub para que persista al reabrir el editor
+          if (data.image_url && state.activeCampaign) {
+            var pubs = (state.activeCampaign.publications || []);
+            for (var i = 0; i < pubs.length; i++) {
+              if (pubs[i].id === pubId) {
+                pubs[i].generated_image_url = data.image_url.split('?')[0];
+                break;
+              }
+            }
+          }
+
           // Actualizar también la miniatura en el calendario si está visible
           var calImg = document.querySelector('[data-pub-id="' + pubId + '"] .pub-cal-image');
-          if (calImg) { calImg.src = absUrl; }
-          showNotification('Imagen generada. Cargando preview...', 'info');
+          if (calImg) { calImg.src = displaySrc; }
+
+          showNotification('Imagen generada. Guardando...', 'info');
         } else {
-          showNotification((data.error || 'No se pudo generar la imagen'), 'error');
+          var errMsg = data.error || 'No se pudo generar la imagen';
+          showNotification(errMsg, 'error');
           if (data.debug) { console.warn('Image gen debug:', data.debug); }
+          console.error('Image gen error:', data);
         }
       })
       .catch(function(e) {
