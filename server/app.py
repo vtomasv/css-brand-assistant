@@ -1317,46 +1317,78 @@ async def generate_publication_image(campaign_id: str, pub_id: str, req: Generat
         if req.instruction:
             prompt = f"{prompt}. Estilo adicional: {req.instruction}"
 
-        # 3. Llamar a Ollama para generar la imagen
+        # 3. Llamar a Ollama usando el endpoint OpenAI-compatible /v1/images/generations
+        # NOTA: /api/generate NO devuelve imágenes. El endpoint correcto es /v1/images/generations
+        logger.info(f"Generando imagen con modelo {req.model}, prompt: {prompt[:100]}...")
         response = requests.post(
-            f"{OLLAMA_URL}/api/generate",
+            f"{OLLAMA_URL}/v1/images/generations",
             json={
                 "model": req.model,
                 "prompt": prompt,
-                "stream": False,
+                "size": "1024x1024",
+                "response_format": "b64_json",
+                "n": 1,
             },
             timeout=300,
         )
         response.raise_for_status()
         data = response.json()
 
-        # Log de debug para entender qué devuelve el modelo
-        logger.info(f"Ollama image response keys: {list(data.keys())}")
-        if "images" in data:
-            logger.info(f"images field count: {len(data['images'])}, first len: {len(data['images'][0]) if data['images'] else 0}")
-        if "response" in data:
-            resp_preview = data["response"][:200] if data["response"] else ""
-            logger.info(f"response field preview: {repr(resp_preview)}")
+        # Log de debug
+        logger.info(f"Ollama /v1/images/generations response keys: {list(data.keys())}")
+        if "data" in data:
+            logger.info(f"data array length: {len(data['data'])}")
+            if data["data"]:
+                first = data["data"][0]
+                logger.info(f"first item keys: {list(first.keys())}")
+                if "b64_json" in first:
+                    logger.info(f"b64_json length: {len(first['b64_json'])}")
 
-        # 4. Extraer imagen base64 (campo 'images' o 'response')
+        # 4. Extraer imagen base64 del campo data[0].b64_json (formato OpenAI)
         image_b64 = None
 
-        # Prioridad 1: campo 'images' (lista de base64)
-        if "images" in data and data["images"]:
-            image_b64 = data["images"][0]
-            logger.info(f"Imagen encontrada en campo 'images', longitud base64: {len(image_b64)}")
+        if "data" in data and data["data"]:
+            first_item = data["data"][0]
+            if "b64_json" in first_item and first_item["b64_json"]:
+                image_b64 = first_item["b64_json"]
+                logger.info(f"Imagen encontrada en data[0].b64_json, longitud: {len(image_b64)}")
+            elif "url" in first_item and first_item["url"]:
+                # Si devuelve URL en lugar de base64, descargarla
+                img_url = first_item["url"]
+                logger.info(f"Imagen como URL: {img_url}, descargando...")
+                img_resp = requests.get(img_url, timeout=60)
+                img_resp.raise_for_status()
+                import base64 as _b64
+                image_b64 = _b64.b64encode(img_resp.content).decode("utf-8")
+                logger.info(f"Imagen descargada y convertida a base64, longitud: {len(image_b64)}")
+        else:
+            logger.error(f"Respuesta inesperada de /v1/images/generations: {list(data.keys())}")
+            logger.error(f"Respuesta completa: {str(data)[:500]}")
 
-        # Prioridad 2: campo 'response' que contenga base64 puro
-        elif "response" in data and data["response"]:
-            candidate = data["response"].strip()
-            # Detectar base64: solo caracteres A-Za-z0-9+/= y longitud mínima de 1000 chars
-            import re as _re
-            is_base64 = bool(_re.match(r'^[A-Za-z0-9+/=\s]{1000,}$', candidate))
-            if is_base64:
-                image_b64 = candidate.replace('\n', '').replace('\r', '').replace(' ', '')
-                logger.info(f"Imagen encontrada en campo 'response' (base64), longitud: {len(image_b64)}")
+        if not image_b64:
+            # Fallback: intentar con /api/generate por si el modelo lo soporta de otra forma
+            logger.warning("Intentando fallback con /api/generate...")
+            fallback_resp = requests.post(
+                f"{OLLAMA_URL}/api/generate",
+                json={"model": req.model, "prompt": prompt, "stream": False},
+                timeout=300,
+            )
+            if fallback_resp.status_code == 200:
+                fb_data = fallback_resp.json()
+                logger.info(f"Fallback /api/generate keys: {list(fb_data.keys())}")
+                if "images" in fb_data and fb_data["images"]:
+                    image_b64 = fb_data["images"][0]
+                    logger.info(f"Imagen en fallback campo 'images', longitud: {len(image_b64)}")
+                elif "response" in fb_data and fb_data["response"]:
+                    candidate = fb_data["response"].strip()
+                    import re as _re
+                    if bool(_re.match(r'^[A-Za-z0-9+/=\s]{1000,}$', candidate)):
+                        image_b64 = candidate.replace('\n', '').replace('\r', '').replace(' ', '')
+                        logger.info(f"Imagen en fallback campo 'response', longitud: {len(image_b64)}")
+                    else:
+                        logger.warning(f"Fallback 'response' no es base64. Preview: {repr(candidate[:200])}")
             else:
-                logger.warning(f"Campo 'response' no es base64 válido. Primeros 200 chars: {repr(candidate[:200])}")
+                logger.warning(f"Fallback /api/generate status: {fallback_resp.status_code}")
 
         if image_b64:
             # 5. Guardar imagen en disco con timestamp para evitar caché
@@ -1380,16 +1412,37 @@ async def generate_publication_image(campaign_id: str, pub_id: str, req: Generat
 
             # 6. Actualizar publicación con URL de imagen
             image_url = f"/api/images/{pub_id}.png?t={ts}"
-            for camp_dir in (DATA_DIR / "campaigns").iterdir():
-                if camp_dir.is_dir() and campaign_id in camp_dir.name:
-                    plan_file = camp_dir / "plan.json"
-                    plan = load_json(plan_file, {"publications": []})
-                    for pub in plan.get("publications", []):
-                        if pub.get("id") == pub_id:
-                            pub["generated_image_url"] = f"/api/images/{pub_id}.png"
-                            pub["updated_at"] = datetime.utcnow().isoformat()
-                            save_json(plan_file, plan)
-                            break
+            pub_updated = False
+
+            # Buscar el plan.json de la campaña por directorio exacto o por búsqueda
+            # El directorio se llama {brand_id}_{campaign_id}
+            campaigns_root = DATA_DIR / "campaigns"
+            if campaigns_root.exists():
+                # Primero intentar ruta directa (más eficiente)
+                for camp_dir in campaigns_root.iterdir():
+                    if not camp_dir.is_dir():
+                        continue
+                    # El nombre puede ser brand_id_campaign_id o solo campaign_id
+                    dir_name = camp_dir.name
+                    if campaign_id in dir_name or dir_name == campaign_id:
+                        plan_file = camp_dir / "plan.json"
+                        if not plan_file.exists():
+                            logger.warning(f"plan.json no encontrado en {camp_dir}")
+                            continue
+                        plan = load_json(plan_file, {"publications": []})
+                        for pub in plan.get("publications", []):
+                            if pub.get("id") == pub_id:
+                                pub["generated_image_url"] = f"/api/images/{pub_id}.png"
+                                pub["updated_at"] = datetime.utcnow().isoformat()
+                                save_json(plan_file, plan)
+                                pub_updated = True
+                                logger.info(f"Publicación {pub_id} actualizada con imagen en {plan_file}")
+                                break
+                    if pub_updated:
+                        break
+
+            if not pub_updated:
+                logger.warning(f"No se encontró la publicación {pub_id} en campaña {campaign_id} para actualizar imagen")
 
             latency = int((time.time() - start) * 1000)
             log_audit("image_generator", "generate_image",
@@ -1403,18 +1456,19 @@ async def generate_publication_image(campaign_id: str, pub_id: str, req: Generat
                 "success": True,
             }
         else:
-            # El modelo respondió pero sin imagen — devolver debug info
+            # El modelo respondió pero sin imagen — devolver debug info completo
             debug_info = {
                 "response_keys": list(data.keys()),
-                "response_preview": data.get("response", "")[:300] if data.get("response") else None,
-                "images_count": len(data.get("images", [])),
+                "data_count": len(data.get("data", [])),
+                "data_preview": str(data.get("data", []))[:300] if data.get("data") else None,
+                "error_detail": data.get("error", {}) if isinstance(data.get("error"), dict) else data.get("error"),
             }
             logger.error(f"Modelo {req.model} no retornó imagen. Debug: {debug_info}")
             return {
                 "error": (
                     f"El modelo {req.model} no retornó una imagen válida. "
-                    "Este modelo puede no soportar generación de imágenes vía Ollama. "
-                    "Verifica que sea un modelo de imagen compatible (ej: x/z-image-turbo, x/flux2-klein)."
+                    "Verifica que Ollama esté en versión >= 0.5.4 y que el modelo sea compatible con generación de imágenes. "
+                    "Nota: la generación de imágenes solo está disponible en macOS actualmente."
                 ),
                 "debug": debug_info,
                 "success": False,
