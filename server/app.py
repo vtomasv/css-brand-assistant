@@ -107,7 +107,93 @@ async def startup_event():
         }
         config_file.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
 
+    # Verificar modelos disponibles en Ollama y actualizar config si es necesario
+    await _verify_and_fix_models()
+
     logger.info(f"CSS Brand Assistant iniciado. DATA_DIR={DATA_DIR}")
+
+
+async def _verify_and_fix_models():
+    """Verifica que el modelo configurado existe en Ollama.
+    Si no existe, usa el mejor modelo disponible como fallback automático.
+    """
+    try:
+        resp = requests.get(f"{OLLAMA_URL}/api/tags", timeout=5)
+        if resp.status_code != 200:
+            logger.warning("Ollama no disponible al inicio — se verificará cuando el usuario lo necesite")
+            return
+
+        available_models = [m["name"] for m in resp.json().get("models", [])]
+        if not available_models:
+            logger.warning("Ollama está corriendo pero no tiene modelos descargados")
+            return
+
+        logger.info(f"Modelos disponibles en Ollama: {available_models}")
+
+        # Leer modelo configurado
+        config_file = DATA_DIR / "config.json"
+        config = load_json(config_file, {})
+        configured_model = config.get("default_model", "llama3.2:3b")
+
+        # Verificar si el modelo configurado está disponible
+        model_base = configured_model.split(":")[0]
+        model_found = any(
+            m == configured_model or m.startswith(model_base + ":")
+            for m in available_models
+        )
+
+        if model_found:
+            logger.info(f"Modelo configurado '{configured_model}' disponible ✓")
+            return
+
+        # El modelo no está disponible → elegir el mejor disponible como fallback
+        # Orden de preferencia: modelos más capaces primero
+        PREFERRED_ORDER = [
+            "llama3.1:8b", "llama3.1:70b", "llama3.2:3b", "llama3.2:1b",
+            "llama3:8b", "llama3:70b", "mistral:7b", "mistral",
+            "gemma3:4b", "gemma3:12b", "gemma2:9b", "phi3:mini",
+            "qwen2.5:7b", "qwen2:7b", "deepseek-r1:8b",
+        ]
+
+        fallback_model = None
+        for preferred in PREFERRED_ORDER:
+            preferred_base = preferred.split(":")[0]
+            for available in available_models:
+                if available == preferred or available.startswith(preferred_base + ":"):
+                    fallback_model = available
+                    break
+            if fallback_model:
+                break
+
+        # Si no está en la lista de preferidos, usar el primero disponible
+        if not fallback_model:
+            fallback_model = available_models[0]
+
+        logger.warning(
+            f"Modelo '{configured_model}' no encontrado. "
+            f"Usando fallback automático: '{fallback_model}'"
+        )
+
+        # Actualizar config con el modelo disponible
+        config["default_model"] = fallback_model
+        config["model_fallback_from"] = configured_model
+        config["model_fallback_at"] = datetime.utcnow().isoformat()
+        save_json(config_file, config)
+
+        # Actualizar también el modelo en todos los agentes que usaban el modelo anterior
+        agents_file = DATA_DIR / "agents" / "agents.json"
+        agents_data = load_json(agents_file, {"agents": []})
+        updated = False
+        for agent in agents_data.get("agents", []):
+            if agent.get("model", "") == configured_model:
+                agent["model"] = fallback_model
+                updated = True
+        if updated:
+            save_json(agents_file, agents_data)
+            logger.info(f"Agentes actualizados para usar modelo '{fallback_model}'")
+
+    except Exception as e:
+        logger.warning(f"No se pudo verificar modelos al inicio: {e}")
 
 # ---------------------------------------------------------------------------
 # Utilidades de persistencia
