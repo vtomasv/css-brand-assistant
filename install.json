@@ -44,7 +44,8 @@
     {
       "method": "shell.run",
       "params": {
-        "message": "{{ram < 6 ? 'ollama pull llama3.2:1b' : ram < 12 ? 'ollama pull llama3.2:3b' : 'ollama pull llama3.1:8b'}}"
+        "message": "{{platform === 'win32' ? 'powershell -ExecutionPolicy Bypass -File scripts\\\\pull_model.ps1' : (ram < 6 ? 'ollama pull llama3.2:1b' : ram < 12 ? 'ollama pull llama3.2:3b' : 'ollama pull llama3.1:8b')}}",
+        "path": "{{cwd}}"
       }
     },
 

@@ -221,6 +221,32 @@ def call_ollama(model: str, system_prompt: str, user_message: str,
                 },
                 timeout=timeout,
             )
+            if response.status_code == 404:
+                # 404 en /api/generate = modelo no descargado
+                logger.error(f"Modelo '{model}' no encontrado en Ollama. Ejecuta: ollama pull {model}")
+                # Listar modelos disponibles para ayudar al diagnóstico
+                try:
+                    tags = requests.get(f"{OLLAMA_URL}/api/tags", timeout=5).json()
+                    available = [m["name"] for m in tags.get("models", [])]
+                    logger.info(f"Modelos disponibles en Ollama: {available}")
+                    if available:
+                        raise HTTPException(
+                            status_code=503,
+                            detail=f"Modelo '{model}' no está descargado. Modelos disponibles: {', '.join(available)}. "
+                                   f"Ve a Agentes IA para cambiar el modelo, o ejecuta: ollama pull {model}"
+                        )
+                    else:
+                        raise HTTPException(
+                            status_code=503,
+                            detail=f"No hay modelos descargados en Ollama. Ejecuta en terminal: ollama pull {model}"
+                        )
+                except HTTPException:
+                    raise
+                except Exception:
+                    raise HTTPException(
+                        status_code=503,
+                        detail=f"Modelo '{model}' no encontrado. Ejecuta: ollama pull {model}"
+                    )
             response.raise_for_status()
             return response.json().get("response", "")
 
