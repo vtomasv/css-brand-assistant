@@ -4,39 +4,35 @@
     {
       "method": "log",
       "params": {
-        "html": "<p>🔄 Verificando dependencias...</p>"
+        "html": "<p>&#x1F504; Iniciando Ollama...</p>"
       }
     },
     {
       "method": "shell.run",
       "params": {
-        "message": "venv/bin/python -c \"import fastapi\" 2>/dev/null || (echo 'Instalando dependencias...' && venv/bin/pip install -r requirements.txt --quiet)",
+        "message": "{{platform === 'win32' ? 'start /B ollama serve > NUL 2>&1' : 'ollama serve > /dev/null 2>&1 &'}}",
+        "path": "{{cwd}}"
+      }
+    },
+    {
+      "method": "shell.run",
+      "params": {
+        "message": "{{platform === 'win32' ? 'timeout /t 3 /nobreak > NUL' : 'sleep 3'}}",
         "path": "{{cwd}}"
       }
     },
     {
       "method": "log",
       "params": {
-        "html": "<p>🔄 Iniciando Ollama...</p>"
+        "html": "<p>&#x1F680; Iniciando servidor CSS Brand Assistant en puerto {{port}}...</p>"
       }
     },
     {
       "method": "shell.run",
       "params": {
-        "message": "ollama serve > /dev/null 2>&1 & sleep 2 && curl -s http://localhost:11434/api/tags > /dev/null || true"
-      }
-    },
-    {
-      "method": "log",
-      "params": {
-        "html": "<p>🚀 Iniciando servidor en puerto {{port}}...</p>"
-      }
-    },
-    {
-      "method": "shell.run",
-      "params": {
-        "message": "venv/bin/python server/app.py",
+        "message": "python server/app.py",
         "path": "{{cwd}}",
+        "venv": "venv",
         "env": {
           "PORT": "{{port}}",
           "DATA_DIR": "{{cwd}}/data",

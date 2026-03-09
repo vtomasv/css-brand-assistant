@@ -3,7 +3,7 @@
     {
       "method": "log",
       "params": {
-        "html": "<h3>🚀 Instalando CSS Brand Assistant...</h3>"
+        "html": "<h3>&#x1F680; Instalando CSS Brand Assistant...</h3><p>Plataforma detectada: {{platform}} | RAM: {{ram}}GB</p>"
       }
     },
     {
@@ -27,19 +27,19 @@
     {
       "method": "shell.run",
       "params": {
-        "message": "ollama serve > /dev/null 2>&1 &"
+        "message": "{{platform === 'win32' ? 'start /B ollama serve > NUL 2>&1' : 'ollama serve > /dev/null 2>&1 &'}}"
       }
     },
     {
       "method": "shell.run",
       "params": {
-        "message": "sleep 3 && curl -s http://localhost:11434/api/tags > /dev/null || true"
+        "message": "{{platform === 'win32' ? 'timeout /t 4 /nobreak > NUL' : 'sleep 4'}}"
       }
     },
     {
       "method": "log",
       "params": {
-        "html": "<p>⬇️ Descargando modelo de IA (puede tardar varios minutos)...</p>"
+        "html": "<p>&#x2B07;&#xFE0F; Descargando modelo de IA (puede tardar varios minutos)...</p>"
       }
     },
     {
@@ -51,40 +51,54 @@
     {
       "method": "log",
       "params": {
-        "html": "<p>🐍 Creando entorno Python e instalando dependencias...</p>"
+        "html": "<p>&#x1F40D; Creando entorno Python...</p>"
       }
     },
     {
       "method": "shell.run",
       "params": {
-        "message": "python3 -m venv venv && venv/bin/pip install --upgrade pip --quiet && venv/bin/pip install -r requirements.txt --quiet && echo DEPS_OK",
+        "message": "python -m venv venv",
         "path": "{{cwd}}"
       }
     },
     {
       "method": "log",
       "params": {
-        "html": "<p>💾 Inicializando directorios de datos...</p>"
+        "html": "<p>&#x1F4E6; Instalando dependencias Python...</p>"
       }
     },
     {
       "method": "shell.run",
       "params": {
-        "message": "mkdir -p data/agents data/prompts/system data/sessions data/exports data/brands data/campaigns data/audit",
+        "message": "pip install --upgrade pip --quiet && pip install -r requirements.txt --quiet && echo DEPS_OK",
+        "path": "{{cwd}}",
+        "venv": "venv"
+      }
+    },
+    {
+      "method": "log",
+      "params": {
+        "html": "<p>&#x1F4BE; Inicializando directorios de datos...</p>"
+      }
+    },
+    {
+      "method": "shell.run",
+      "params": {
+        "message": "{{platform === 'win32' ? 'mkdir data\\\\agents data\\\\prompts\\\\system data\\\\sessions data\\\\exports data\\\\brands data\\\\campaigns data\\\\audit 2>NUL || true' : 'mkdir -p data/agents data/prompts/system data/sessions data/exports data/brands data/campaigns data/audit'}}",
         "path": "{{cwd}}"
       }
     },
     {
       "method": "shell.run",
       "params": {
-        "message": "cp defaults/agents.json data/agents/agents.json 2>/dev/null || true",
+        "message": "{{platform === 'win32' ? 'copy defaults\\\\agents.json data\\\\agents\\\\agents.json 2>NUL || true' : 'cp defaults/agents.json data/agents/agents.json 2>/dev/null || true'}}",
         "path": "{{cwd}}"
       }
     },
     {
       "method": "shell.run",
       "params": {
-        "message": "cp defaults/prompts/*.md data/prompts/system/ 2>/dev/null || true",
+        "message": "{{platform === 'win32' ? 'for %f in (defaults\\\\prompts\\\\*.md) do copy \"%f\" data\\\\prompts\\\\system\\ 2>NUL || true' : 'cp defaults/prompts/*.md data/prompts/system/ 2>/dev/null || true'}}",
         "path": "{{cwd}}"
       }
     },
@@ -92,13 +106,13 @@
       "method": "fs.write",
       "params": {
         "path": "data/config.json",
-        "text": "{{JSON.stringify({version: '0.1.0', installedAt: new Date().toISOString(), defaultModel: ram < 6 ? 'llama3.2:1b' : ram < 12 ? 'llama3.2:3b' : 'llama3.1:8b'}, null, 2)}}"
+        "text": "{{JSON.stringify({version: '0.1.0', installedAt: new Date().toISOString(), platform: platform, defaultModel: ram < 6 ? 'llama3.2:1b' : ram < 12 ? 'llama3.2:3b' : 'llama3.1:8b'}, null, 2)}}"
       }
     },
     {
       "method": "log",
       "params": {
-        "html": "<h3 style='color: #22c55e'>✅ Instalación completada</h3><p>Haz click en <strong>Iniciar</strong> para comenzar a usar CSS Brand Assistant.</p>"
+        "html": "<h3 style='color: #22c55e'>&#x2705; Instalaci&#xF3;n completada</h3><p>Haz click en <strong>Iniciar</strong> para comenzar a usar CSS Brand Assistant.</p>"
       }
     },
     {
