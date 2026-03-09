@@ -48,6 +48,18 @@ PORT = int(os.environ.get("PORT", 7860))
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 
 # ---------------------------------------------------------------------------
+# Timeouts para llamadas a Ollama
+# Se pueden sobreescribir con variables de entorno o via config.json
+# (clave: "ollama_timeout", "ollama_timeout_campaign", "ollama_timeout_adn")
+# ---------------------------------------------------------------------------
+# Timeout base para consultas cortas (ADN, regeneración de posts, etc.)
+OLLAMA_TIMEOUT_DEFAULT: int = int(os.environ.get("OLLAMA_TIMEOUT", 300))       # 5 min
+# Timeout para generación de campañas completas (muchas publicaciones)
+OLLAMA_TIMEOUT_CAMPAIGN: int = int(os.environ.get("OLLAMA_TIMEOUT_CAMPAIGN", 600))  # 10 min
+# Timeout para análisis de ADN de marca
+OLLAMA_TIMEOUT_ADN: int = int(os.environ.get("OLLAMA_TIMEOUT_ADN", 300))       # 5 min
+
+# ---------------------------------------------------------------------------
 # Estado global de descargas de modelos en progreso
 # Clave: nombre del modelo, Valor: dict con status/progress/error
 # ---------------------------------------------------------------------------
@@ -311,14 +323,42 @@ def log_audit(agent_id: str, task: str, inputs: dict, output: str,
 _ollama_api_endpoint: Optional[str] = None
 
 
+def get_ollama_timeout(kind: str = "default") -> int:
+    """Retorna el timeout configurado para llamadas a Ollama.
+
+    Jerarquía de precedencia (mayor a menor):
+      1. config.json  (clave: ollama_timeout / ollama_timeout_campaign / ollama_timeout_adn)
+      2. Variables de entorno OLLAMA_TIMEOUT / OLLAMA_TIMEOUT_CAMPAIGN / OLLAMA_TIMEOUT_ADN
+      3. Valores por defecto del código (300s / 600s / 300s)
+
+    Args:
+        kind: "default" | "campaign" | "adn"
+    """
+    config = load_json(DATA_DIR / "config.json", {})
+    key_map = {
+        "default":  ("ollama_timeout",          OLLAMA_TIMEOUT_DEFAULT),
+        "campaign": ("ollama_timeout_campaign",  OLLAMA_TIMEOUT_CAMPAIGN),
+        "adn":      ("ollama_timeout_adn",       OLLAMA_TIMEOUT_ADN),
+    }
+    config_key, fallback = key_map.get(kind, ("ollama_timeout", OLLAMA_TIMEOUT_DEFAULT))
+    try:
+        return int(config.get(config_key, fallback))
+    except (ValueError, TypeError):
+        return fallback
+
+
 def call_ollama(model: str, system_prompt: str, user_message: str,
-                temperature: float = 0.7, timeout: int = 120) -> str:
+                temperature: float = 0.7, timeout: Optional[int] = None) -> str:
     """Llama al LLM local vía Ollama API.
     
     Detecta automáticamente si Ollama soporta /api/chat (v0.1.14+) o solo
     /api/generate (versiones antiguas, común en Windows con winget).
     """
     global _ollama_api_endpoint
+
+    # Resolver timeout: si no se pasó explícitamente, leer de config/env
+    if timeout is None:
+        timeout = get_ollama_timeout("default")
 
     try:
         # --- Intento 1: /api/chat (Ollama moderno, v0.1.14+) ---
@@ -730,7 +770,11 @@ CONTENIDO DEL SITIO:
 
 Responde en formato JSON con los campos del ADN empresarial."""
 
-        result = call_ollama(model, system_prompt, user_message, temperature=0.3)
+        result = call_ollama(
+            model, system_prompt, user_message,
+            temperature=0.3,
+            timeout=get_ollama_timeout("adn"),
+        )
         latency = int((time.time() - start) * 1000)
 
         # Intentar parsear JSON del resultado
@@ -989,7 +1033,11 @@ HISTORIAL DE CONVERSACIÓN:
 
 MENSAJE DEL USUARIO: {msg.message}"""
 
-    response = call_ollama(model, system_prompt, user_message, temperature=0.7)
+    response = call_ollama(
+        model, system_prompt, user_message,
+        temperature=0.7,
+        timeout=get_ollama_timeout("default"),
+    )
     latency = int((time.time() - start) * 1000)
 
     # Guardar mensajes en sesión
@@ -1069,7 +1117,11 @@ async def finish_interview(brand_id: str, session_id: Optional[str] = None):
     )
 
     try:
-        result = call_ollama(model, system_prompt, user_message, temperature=0.3, timeout=180)
+        result = call_ollama(
+            model, system_prompt, user_message,
+            temperature=0.3,
+            timeout=get_ollama_timeout("adn"),
+        )
         latency = int((time.time() - start) * 1000)
 
         parsed = _parse_llm_json(result)
@@ -1291,7 +1343,11 @@ ADN DE MARCA:
 Genera un plan con etapas narrativas, distribución por canal y calendario de publicaciones.
 Responde en JSON con la estructura: stages (lista de etapas) y publications (lista de publicaciones)."""
 
-        plan_result = call_ollama(model, system_prompt, user_message, temperature=0.5)
+        plan_result = call_ollama(
+            model, system_prompt, user_message,
+            temperature=0.5,
+            timeout=get_ollama_timeout("campaign"),
+        )
 
         # Parsear y guardar plan
         plan = _parse_campaign_plan(plan_result, campaign_data)
@@ -1521,7 +1577,11 @@ async def regenerate_publication(campaign_id: str, pub_id: str,
                         f'Formato: {{"texto_del_post": "...", "hashtags": ["#tag1"], "cta": "...", "image_prompt": "..."}}'
                     )
 
-                    result = call_ollama(model, system_prompt, user_message, temperature=0.8)
+                    result = call_ollama(
+                        model, system_prompt, user_message,
+                        temperature=0.8,
+                        timeout=get_ollama_timeout("default"),
+                    )
                     latency = int((time.time() - start) * 1000)
 
                     # Guardar versión anterior
