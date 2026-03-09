@@ -2235,9 +2235,14 @@ function renderPubEditor(pub) {
   html += '<div class="form-group"><label>Prompt de imagen</label>';
   html += '<textarea id="editPubImagePrompt" style="min-height:60px">' + escapeHtml(pub.image_prompt || '') + '</textarea></div>';
 
-  // ── Sección de generación de imagen con IA ──
+  // ── Sección de imagen ──
   html += '<div style="background:var(--bg-base);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px">';
-  html += '<div style="font-size:12px;font-weight:700;color:var(--text-main);margin-bottom:10px">Generación con IA</div>';
+  html += '<div style="font-size:12px;font-weight:700;color:var(--text-main);margin-bottom:10px">🖼️ Imagen del post</div>';
+
+  // Estado del proveedor de imagen (se carga async)
+  html += '<div id="imageProviderStatus" style="font-size:11px;color:var(--text-muted);margin-bottom:8px;padding:6px 8px;background:var(--bg-card);border-radius:6px">';
+  html += '<span class="loading-spinner" style="width:10px;height:10px;margin-right:6px"></span>Verificando proveedores de imagen...</div>';
+
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">';
   // Selector: qué generar
   html += '<div><label style="font-size:11px">¿Qué generar?</label>';
@@ -2246,7 +2251,7 @@ function renderPubEditor(pub) {
   html += '<option value="image">Imagen del post</option>';
   html += '</select></div>';
   // Selector: modelo de imagen
-  html += '<div><label style="font-size:11px">Modelo de imagen</label>';
+  html += '<div><label style="font-size:11px">Modelo de imagen (Ollama)</label>';
   html += '<select id="editImageModel" style="font-size:12px">';
   html += '<option value="x/z-image-turbo">z-image-turbo (rápido)</option>';
   html += '<option value="x/flux2-klein">flux2-klein (alta calidad)</option>';
@@ -2262,9 +2267,22 @@ function renderPubEditor(pub) {
   html += '<option value="en">English</option>';
   html += '<option value="pt">Português</option>';
   html += '</select></div>';
+
+  // Botones: Generar con IA + Subir imagen manualmente
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">';
   html += '<button class="btn btn-accent btn-sm" id="btnGenerate" onclick="generateWithAI(\'' + pub.id + '\')">Generar con IA</button>';
+  html += '<span style="font-size:11px;color:var(--text-muted)">o</span>';
+  html += '<label class="btn btn-secondary btn-sm" style="cursor:pointer;margin:0" title="Cargar imagen desde tu computadora">';
+  html += '📂 Cargar desde disco';
+  html += '<input type="file" id="uploadImageInput" accept="image/png,image/jpeg,image/jpg,image/gif,image/webp,image/svg+xml" style="display:none" onchange="uploadImageManually(\'' + pub.id + '\', \'' + (state.activeCampaign ? state.activeCampaign.id : '') + '\')"/>';
+  html += '</label>';
   html += '</div>';
-  // ── fin sección IA ──
+
+  html += '</div>';
+  // ── fin sección imagen ──
+
+  // Cargar estado de proveedores de imagen en background
+  setTimeout(function() { _loadImageProviderStatus(); }, 100);
 
   html += '<div class="form-group"><label>Estado de publicación</label>';
   html += '<select id="editPubStatus">';
@@ -2360,12 +2378,16 @@ function generateWithAI(pubId) {
       .then(function(data) {
         if (btn) { btn.disabled = false; btn.innerHTML = 'Generar con IA'; }
         if (data.success && (data.image_b64 || data.image_url)) {
-          // Preferir base64 directo (evita problemas de URL relativa/absoluta y archivos)
+          // Determinar MIME type según el método de generación
+          var isSvg = (data.generation_method === 'placeholder_svg') ||
+                      (data.image_url && data.image_url.indexOf('.svg') !== -1);
+          var mimeType = isSvg ? 'image/svg+xml' : 'image/png';
+
+          // Preferir base64 directo (evita problemas de URL relativa/absoluta)
           var displaySrc;
           if (data.image_b64) {
-            displaySrc = 'data:image/png;base64,' + data.image_b64;
+            displaySrc = 'data:' + mimeType + ';base64,' + data.image_b64;
           } else {
-            // Fallback: URL absoluta con cache-busting
             var ts = Date.now();
             var imgPath = data.image_url.split('?')[0];
             displaySrc = window.location.origin + imgPath + '?t=' + ts;
@@ -2380,14 +2402,24 @@ function generateWithAI(pubId) {
               container.innerHTML = '<span style="color:#ef4444">Error al cargar imagen</span>';
             };
             img.onload = function() {
-              showNotification('\u2705 Imagen generada correctamente', 'success');
+              if (isSvg) {
+                // Mostrar aviso de placeholder con opción de subir imagen real
+                var warningBar = document.createElement('div');
+                warningBar.style.cssText = 'position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,0.75);color:#fbbf24;font-size:10px;padding:4px 8px;text-align:center;border-radius:0 0 8px 8px';
+                warningBar.innerHTML = '⚠️ Placeholder — Cargá una imagen real desde disco';
+                container.appendChild(warningBar);
+                showNotification('⚠️ ' + (data.warning || 'Placeholder generado. Podés reemplazarlo cargando una imagen desde disco.'), 'warning');
+              } else {
+                showNotification('\u2705 Imagen generada con ' + (data.generation_method || 'IA'), 'success');
+              }
             };
             img.src = displaySrc;
             container.innerHTML = '';
+            container.style.position = 'relative';
             container.appendChild(img);
           }
 
-          // Guardar URL en el estado local del pub para que persista al reabrir el editor
+          // Guardar URL en el estado local
           if (data.image_url && state.activeCampaign) {
             var pubs = (state.activeCampaign.publications || []);
             for (var i = 0; i < pubs.length; i++) {
@@ -2398,11 +2430,10 @@ function generateWithAI(pubId) {
             }
           }
 
-          // Actualizar también la miniatura en el calendario si está visible
+          // Actualizar miniatura en el calendario
           var calImg = document.querySelector('[data-pub-id="' + pubId + '"] .pub-cal-image');
           if (calImg) { calImg.src = displaySrc; }
 
-          showNotification('Imagen generada. Guardando...', 'info');
         } else {
           var errMsg = data.error || 'No se pudo generar la imagen';
           showNotification(errMsg, 'error');
@@ -2443,6 +2474,159 @@ function copyPubText() {
       showNotification('Texto copiado al portapapeles', 'success');
     });
   }
+}
+
+// ============================================================
+// IMAGEN: CARGA MANUAL Y ESTADO DE PROVEEDORES
+// ============================================================
+
+/**
+ * Carga el estado de los proveedores de imagen y actualiza el panel en el editor.
+ * Se llama automáticamente al abrir el editor de publicación.
+ */
+function _loadImageProviderStatus() {
+  var el = document.getElementById('imageProviderStatus');
+  if (!el) return;
+
+  fetch(apiUrl('/image-providers/status'))
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var effective = data.effective_provider || 'placeholder_svg';
+      var providers = data.providers || {};
+      var icons = {
+        ollama: '\uD83E\uDD99',
+        automatic1111: '\uD83C\uDFA8',
+        comfyui: '\u2728',
+        placeholder_svg: '\uD83D\uDDBC\uFE0F'
+      };
+      var labels = {
+        ollama: 'Ollama (macOS/Linux)',
+        automatic1111: 'AUTOMATIC1111',
+        comfyui: 'ComfyUI',
+        placeholder_svg: 'Placeholder SVG'
+      };
+      var colors = {
+        ollama: '#22c55e',
+        automatic1111: '#3b82f6',
+        comfyui: '#a855f7',
+        placeholder_svg: '#f59e0b'
+      };
+
+      var html = '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">';
+      html += '<span style="font-weight:700;color:' + (colors[effective] || '#888') + '">';
+      html += (icons[effective] || '') + ' Proveedor activo: ' + (labels[effective] || effective) + '</span>';
+
+      // Mostrar todos los proveedores disponibles
+      var available = [];
+      for (var key in providers) {
+        if (providers[key].available && key !== effective) {
+          available.push(labels[key] || key);
+        }
+      };
+      if (available.length > 0) {
+        html += '<span style="color:var(--text-muted)"> | También disponibles: ' + available.join(', ') + '</span>';
+      }
+
+      // Mostrar links de instalación si ningún proveedor de IA está disponible
+      if (effective === 'placeholder_svg') {
+        html += '</div>';
+        html += '<div style="margin-top:6px;font-size:10px;color:var(--text-muted)">';
+        html += 'Para generar imágenes con IA en Windows: ';
+        html += '<a href="https://github.com/AUTOMATIC1111/stable-diffusion-webui" target="_blank" style="color:#3b82f6">AUTOMATIC1111</a>';
+        html += ' o ';
+        html += '<a href="https://github.com/comfyanonymous/ComfyUI" target="_blank" style="color:#a855f7">ComfyUI</a>';
+        html += ' (ambos gratuitos y locales)';
+      }
+
+      html += '</div>';
+      el.innerHTML = html;
+    })
+    .catch(function() {
+      el.innerHTML = '<span style="color:var(--text-muted)">No se pudo verificar proveedores de imagen</span>';
+    });
+}
+
+/**
+ * Sube una imagen desde el disco del usuario y la asocia a la publicación.
+ * @param {string} pubId - ID de la publicación
+ * @param {string} campaignId - ID de la campaña
+ */
+function uploadImageManually(pubId, campaignId) {
+  var input = document.getElementById('uploadImageInput');
+  if (!input || !input.files || !input.files[0]) return;
+
+  var file = input.files[0];
+  var maxSize = 10 * 1024 * 1024; // 10 MB
+  if (file.size > maxSize) {
+    showNotification('El archivo es demasiado grande. Máximo 10 MB.', 'error');
+    return;
+  }
+
+  // Mostrar preview inmediato con FileReader (antes de subir)
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    var container = document.getElementById('pubPreviewImageContainer');
+    if (container) {
+      var img = document.createElement('img');
+      img.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:8px';
+      img.src = e.target.result;
+      container.innerHTML = '';
+      container.appendChild(img);
+    }
+  };
+  reader.readAsDataURL(file);
+
+  // Subir al servidor
+  var formData = new FormData();
+  formData.append('file', file);
+
+  var uploadUrl = apiUrl('/campaigns/' + campaignId + '/publications/' + pubId + '/upload-image');
+  showNotification('Subiendo imagen...', 'info');
+
+  fetch(uploadUrl, { method: 'POST', body: formData })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.success) {
+        showNotification('\u2705 Imagen cargada correctamente', 'success');
+
+        // Actualizar estado local
+        if (state.activeCampaign) {
+          var pubs = state.activeCampaign.publications || [];
+          for (var i = 0; i < pubs.length; i++) {
+            if (pubs[i].id === pubId) {
+              pubs[i].generated_image_url = data.image_url.split('?')[0];
+              break;
+            }
+          }
+        }
+
+        // Actualizar miniatura en el calendario
+        var container = document.getElementById('pubPreviewImageContainer');
+        if (container) {
+          var ts = Date.now();
+          var imgPath = data.image_url.split('?')[0];
+          var src = window.location.origin + imgPath + '?t=' + ts;
+          var img = document.createElement('img');
+          img.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:8px';
+          img.src = src;
+          container.innerHTML = '';
+          container.appendChild(img);
+        }
+
+        var calImg = document.querySelector('[data-pub-id="' + pubId + '"] .pub-cal-image');
+        if (calImg && data.image_url) {
+          calImg.src = window.location.origin + data.image_url.split('?')[0] + '?t=' + Date.now();
+        }
+      } else {
+        showNotification('Error al subir imagen: ' + (data.detail || data.error || 'Error desconocido'), 'error');
+      }
+    })
+    .catch(function(e) {
+      showNotification('Error al subir imagen: ' + e.message, 'error');
+    });
+
+  // Limpiar el input para permitir subir el mismo archivo de nuevo
+  input.value = '';
 }
 
 // ============================================================

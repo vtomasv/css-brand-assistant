@@ -30,7 +30,7 @@ if sys.platform == "win32":
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
 import requests
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
@@ -58,6 +58,20 @@ OLLAMA_TIMEOUT_DEFAULT: int = int(os.environ.get("OLLAMA_TIMEOUT", 300))       #
 OLLAMA_TIMEOUT_CAMPAIGN: int = int(os.environ.get("OLLAMA_TIMEOUT_CAMPAIGN", 600))  # 10 min
 # Timeout para análisis de ADN de marca
 OLLAMA_TIMEOUT_ADN: int = int(os.environ.get("OLLAMA_TIMEOUT_ADN", 300))       # 5 min
+
+# ---------------------------------------------------------------------------
+# Proveedores de generación de imágenes
+# Se pueden configurar via variables de entorno o config.json
+# Proveedores soportados: "ollama" | "automatic1111" | "comfyui" | "auto"
+# - "auto": prueba en orden Ollama → A1111 → ComfyUI → placeholder SVG
+# - "ollama": solo Ollama (macOS/Linux)
+# - "automatic1111": AUTOMATIC1111 WebUI (http://localhost:7860/sdapi/v1/txt2img)
+# - "comfyui": ComfyUI (http://localhost:8188)
+# ---------------------------------------------------------------------------
+IMAGE_PROVIDER: str = os.environ.get("IMAGE_PROVIDER", "auto")
+A1111_URL: str = os.environ.get("A1111_URL", "http://localhost:7860")
+COMFYUI_URL: str = os.environ.get("COMFYUI_URL", "http://localhost:8188")
+IMAGE_TIMEOUT: int = int(os.environ.get("IMAGE_TIMEOUT", 300))  # 5 min
 
 # ---------------------------------------------------------------------------
 # Estado global de descargas de modelos en progreso
@@ -1802,6 +1816,144 @@ def _ensure_model_available(model: str) -> dict:
         return {"available": False, "pulled": False, "error": str(e)}
 
 
+def _get_image_provider_config() -> dict:
+    """Retorna la configuración del proveedor de imágenes desde config.json o env vars."""
+    cfg = load_json(DATA_DIR / "config.json", {})
+    return {
+        "provider": cfg.get("image_provider", IMAGE_PROVIDER),
+        "a1111_url": cfg.get("a1111_url", A1111_URL),
+        "comfyui_url": cfg.get("comfyui_url", COMFYUI_URL),
+        "timeout": int(cfg.get("image_timeout", IMAGE_TIMEOUT)),
+    }
+
+
+def _try_automatic1111(prompt: str, cfg: dict) -> Optional[str]:
+    """Intenta generar imagen con AUTOMATIC1111 WebUI.
+
+    Requiere que AUTOMATIC1111 esté corriendo con --api flag:
+      webui-user.bat: set COMMANDLINE_ARGS=--api
+    URL por defecto: http://localhost:7860
+    Endpoint: POST /sdapi/v1/txt2img
+    Respuesta: {"images": ["base64..."]}
+    """
+    base_url = cfg.get("a1111_url", A1111_URL).rstrip("/")
+    timeout = cfg.get("timeout", IMAGE_TIMEOUT)
+
+    try:
+        # Verificar que A1111 esté disponible
+        health = requests.get(f"{base_url}/sdapi/v1/sd-models", timeout=5)
+        if health.status_code != 200:
+            logger.debug(f"A1111 no disponible en {base_url} (status {health.status_code})")
+            return None
+    except Exception:
+        logger.debug(f"A1111 no disponible en {base_url}")
+        return None
+
+    logger.info(f"Generando imagen con AUTOMATIC1111 en {base_url}...")
+    payload = {
+        "prompt": prompt,
+        "negative_prompt": "blurry, low quality, distorted, watermark, text",
+        "steps": 20,
+        "width": 1024,
+        "height": 1024,
+        "cfg_scale": 7,
+        "sampler_name": "DPM++ 2M Karras",
+    }
+    resp = requests.post(f"{base_url}/sdapi/v1/txt2img", json=payload, timeout=timeout)
+    resp.raise_for_status()
+    data = resp.json()
+    images = data.get("images", [])
+    if images and images[0]:
+        logger.info(f"A1111: imagen generada, longitud base64: {len(images[0])}")
+        return images[0]
+    logger.warning("A1111: respuesta sin campo 'images'")
+    return None
+
+
+def _try_comfyui(prompt: str, cfg: dict) -> Optional[str]:
+    """Intenta generar imagen con ComfyUI.
+
+    Requiere que ComfyUI esté corriendo.
+    URL por defecto: http://localhost:8188
+    Usa el workflow mínimo de txt2img con SDXL-Turbo o SD 1.5.
+    """
+    import uuid as _uuid
+    import time as _time
+
+    base_url = cfg.get("comfyui_url", COMFYUI_URL).rstrip("/")
+    timeout = cfg.get("timeout", IMAGE_TIMEOUT)
+
+    try:
+        health = requests.get(f"{base_url}/system_stats", timeout=5)
+        if health.status_code != 200:
+            logger.debug(f"ComfyUI no disponible en {base_url}")
+            return None
+    except Exception:
+        logger.debug(f"ComfyUI no disponible en {base_url}")
+        return None
+
+    logger.info(f"Generando imagen con ComfyUI en {base_url}...")
+
+    # Workflow mínimo para txt2img
+    client_id = str(_uuid.uuid4())
+    workflow = {
+        "3": {"class_type": "KSampler", "inputs": {
+            "seed": 42, "steps": 20, "cfg": 7,
+            "sampler_name": "euler", "scheduler": "normal",
+            "denoise": 1.0,
+            "model": ["4", 0], "positive": ["6", 0],
+            "negative": ["7", 0], "latent_image": ["5", 0]
+        }},
+        "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "v1-5-pruned-emaonly.ckpt"}},
+        "5": {"class_type": "EmptyLatentImage", "inputs": {"width": 512, "height": 512, "batch_size": 1}},
+        "6": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": ["4", 1]}},
+        "7": {"class_type": "CLIPTextEncode", "inputs": {"text": "blurry, low quality", "clip": ["4", 1]}},
+        "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
+        "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": "css_brand", "images": ["8", 0]}},
+    }
+
+    queue_resp = requests.post(
+        f"{base_url}/prompt",
+        json={"prompt": workflow, "client_id": client_id},
+        timeout=30,
+    )
+    queue_resp.raise_for_status()
+    prompt_id = queue_resp.json().get("prompt_id")
+    if not prompt_id:
+        logger.warning("ComfyUI: no se obtuvo prompt_id")
+        return None
+
+    # Esperar a que termine (polling)
+    deadline = _time.time() + timeout
+    while _time.time() < deadline:
+        hist_resp = requests.get(f"{base_url}/history/{prompt_id}", timeout=10)
+        if hist_resp.status_code == 200:
+            hist = hist_resp.json()
+            if prompt_id in hist:
+                outputs = hist[prompt_id].get("outputs", {})
+                for node_id, node_out in outputs.items():
+                    images_list = node_out.get("images", [])
+                    if images_list:
+                        img_info = images_list[0]
+                        # Descargar la imagen generada
+                        img_resp = requests.get(
+                            f"{base_url}/view",
+                            params={"filename": img_info["filename"],
+                                    "subfolder": img_info.get("subfolder", ""),
+                                    "type": img_info.get("type", "output")},
+                            timeout=30,
+                        )
+                        img_resp.raise_for_status()
+                        import base64 as _b64
+                        b64 = _b64.b64encode(img_resp.content).decode("utf-8")
+                        logger.info(f"ComfyUI: imagen generada, longitud base64: {len(b64)}")
+                        return b64
+        _time.sleep(2)
+
+    logger.warning("ComfyUI: timeout esperando resultado")
+    return None
+
+
 def _generate_placeholder_svg(prompt: str, model: str) -> str:
     """Genera un placeholder SVG profesional codificado en base64.
 
@@ -1907,16 +2059,17 @@ def _generate_placeholder_svg(prompt: str, model: str) -> str:
 
 @app.post("/api/campaigns/{campaign_id}/publications/{pub_id}/generate-image")
 async def generate_publication_image(campaign_id: str, pub_id: str, req: GenerateImageRequest):
-    """Genera una imagen para la publicación usando Ollama con modelo de imagen.
+    """Genera una imagen para la publicación.
 
-    Estrategia de generación (en orden de prioridad):
-    1. /api/generate con modelo de imagen (Ollama >= 0.5.4, macOS/Linux)
-    2. /v1/images/generations (OpenAI-compatible, si está disponible)
-    3. Placeholder SVG profesional (fallback universal, funciona en Windows)
+    Estrategia multi-proveedor (configurable via IMAGE_PROVIDER en config.json o env var):
+    - "auto" (defecto): prueba en orden Ollama → A1111 → ComfyUI → placeholder SVG
+    - "ollama": solo Ollama (macOS/Linux, experimental)
+    - "automatic1111": AUTOMATIC1111 WebUI con --api flag
+    - "comfyui": ComfyUI local
 
-    En Windows, la generación de imágenes con Ollama no está soportada todavía
-    (limitación upstream de Ollama). El placeholder SVG permite continuar el flujo
-    de trabajo y se puede reemplazar manualmente desde la UI.
+    En Windows, Ollama no soporta generación de imágenes. Si AUTOMATIC1111 o ComfyUI
+    están instalados, se usan automáticamente. Si ninguno está disponible, se genera
+    un placeholder SVG profesional que el usuario puede reemplazar manualmente.
     """
     import time, base64
     start = time.time()
@@ -1926,113 +2079,97 @@ async def generate_publication_image(campaign_id: str, pub_id: str, req: Generat
     if req.instruction:
         prompt = f"{prompt}. Estilo adicional: {req.instruction}"
 
-    logger.info(f"Generando imagen con modelo {req.model}, prompt: {prompt[:100]}...")
+    logger.info(f"Generando imagen, proveedor configurado: {IMAGE_PROVIDER}, prompt: {prompt[:100]}...")
 
     image_b64: Optional[str] = None
     generation_method: str = "none"
 
-    # -----------------------------------------------------------------------
-    # Intento 1: /api/generate (Ollama nativo, macOS/Linux con modelo imagen)
-    # -----------------------------------------------------------------------
-    try:
-        model_status = _ensure_model_available(req.model)
-        if model_status["available"]:
-            if model_status.get("pulled"):
-                logger.info(f"Modelo {req.model} descargado exitosamente antes de generar")
-
-            response = requests.post(
-                f"{OLLAMA_URL}/api/generate",
-                json={
-                    "model": req.model,
-                    "prompt": prompt,
-                    "stream": False,
-                    "width": 1024,
-                    "height": 1024,
-                },
-                timeout=300,
-            )
-
-            if response.status_code == 200:
-                data = response.json()
-                response_keys = list(data.keys())
-                logger.info(f"Ollama /api/generate response keys: {response_keys}")
-
-                if "image" in data and data["image"]:
-                    image_b64 = data["image"]
-                    generation_method = "ollama_api_generate"
-                    logger.info(f"Imagen en campo 'image', longitud: {len(image_b64)}")
-                elif "images" in data and data["images"]:
-                    image_b64 = data["images"][0]
-                    generation_method = "ollama_api_generate"
-                    logger.info(f"Imagen en campo 'images[0]', longitud: {len(image_b64)}")
-                elif "response" in data and data["response"]:
-                    import re as _re
-                    candidate = data["response"].strip().replace('\n', '').replace(' ', '')
-                    if bool(_re.match(r'^[A-Za-z0-9+/=]{500,}$', candidate)):
-                        image_b64 = candidate
-                        generation_method = "ollama_api_generate_response"
-                        logger.info(f"Imagen en campo 'response' (base64), longitud: {len(image_b64)}")
-                    else:
-                        logger.warning(f"Campo 'response' no es base64. Preview: {repr(data['response'][:200])}")
-            else:
-                logger.warning(
-                    f"Ollama /api/generate retornó {response.status_code} para modelo de imagen. "
-                    f"Esto es esperado en Windows (generación de imágenes no soportada). "
-                    f"Activando fallback."
-                )
-        else:
-            logger.warning(f"Modelo {req.model} no disponible: {model_status.get('error')}. Activando fallback.")
-
-    except requests.exceptions.ConnectionError:
-        logger.warning("Ollama no disponible para generación de imagen. Activando fallback.")
-    except Exception as e:
-        logger.warning(f"Error en /api/generate para imagen: {e}. Activando fallback.")
+    # Obtener configuración del proveedor (puede venir de config.json)
+    img_cfg = _get_image_provider_config()
+    provider = img_cfg["provider"]
 
     # -----------------------------------------------------------------------
-    # Intento 2: /v1/images/generations (OpenAI-compatible)
+    # Intento 1: Ollama (macOS/Linux con modelo de imagen)
     # -----------------------------------------------------------------------
-    if not image_b64:
+    if provider in ("auto", "ollama") and not image_b64:
         try:
-            fallback_resp = requests.post(
-                f"{OLLAMA_URL}/v1/images/generations",
-                json={
-                    "model": req.model,
-                    "prompt": prompt,
-                    "size": "1024x1024",
-                    "response_format": "b64_json",
-                    "n": 1,
-                },
-                timeout=300,
-            )
-            if fallback_resp.status_code == 200:
-                fb_data = fallback_resp.json()
-                if "data" in fb_data and fb_data["data"]:
-                    first = fb_data["data"][0]
-                    if "b64_json" in first and first["b64_json"]:
-                        image_b64 = first["b64_json"]
-                        generation_method = "openai_compat"
-                        logger.info(f"Imagen en fallback OpenAI-compat, longitud: {len(image_b64)}")
-                    elif "url" in first and first["url"]:
-                        img_resp = requests.get(first["url"], timeout=60)
-                        img_resp.raise_for_status()
-                        image_b64 = base64.b64encode(img_resp.content).decode("utf-8")
-                        generation_method = "openai_compat_url"
-                        logger.info(f"Imagen descargada desde URL OpenAI-compat, longitud: {len(image_b64)}")
+            model_status = _ensure_model_available(req.model)
+            if model_status["available"]:
+                if model_status.get("pulled"):
+                    logger.info(f"Modelo {req.model} descargado antes de generar")
+
+                response = requests.post(
+                    f"{OLLAMA_URL}/api/generate",
+                    json={
+                        "model": req.model,
+                        "prompt": prompt,
+                        "stream": False,
+                        "width": 1024,
+                        "height": 1024,
+                    },
+                    timeout=img_cfg["timeout"],
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    if "image" in data and data["image"]:
+                        image_b64 = data["image"]
+                        generation_method = "ollama"
+                        logger.info(f"Ollama: imagen generada, longitud: {len(image_b64)}")
+                    elif "images" in data and data["images"]:
+                        image_b64 = data["images"][0]
+                        generation_method = "ollama"
+                    elif "response" in data and data["response"]:
+                        import re as _re
+                        candidate = data["response"].strip().replace('\n', '').replace(' ', '')
+                        if bool(_re.match(r'^[A-Za-z0-9+/=]{500,}$', candidate)):
+                            image_b64 = candidate
+                            generation_method = "ollama"
+                else:
+                    logger.warning(
+                        f"Ollama retornó {response.status_code} para modelo de imagen. "
+                        f"Esperado en Windows. Probando siguiente proveedor."
+                    )
             else:
-                logger.warning(f"Fallback /v1/images/generations status: {fallback_resp.status_code}")
-        except Exception as fb_err:
-            logger.warning(f"Fallback /v1/images/generations error: {fb_err}")
+                logger.warning(f"Modelo Ollama {req.model} no disponible. Probando siguiente proveedor.")
+        except requests.exceptions.ConnectionError:
+            logger.warning("Ollama no disponible. Probando siguiente proveedor.")
+        except Exception as e:
+            logger.warning(f"Error Ollama imagen: {e}. Probando siguiente proveedor.")
 
     # -----------------------------------------------------------------------
-    # Intento 3: Placeholder SVG profesional (fallback universal para Windows)
+    # Intento 2: AUTOMATIC1111 WebUI
+    # -----------------------------------------------------------------------
+    if provider in ("auto", "automatic1111") and not image_b64:
+        try:
+            result = _try_automatic1111(prompt, img_cfg)
+            if result:
+                image_b64 = result
+                generation_method = "automatic1111"
+        except Exception as e:
+            logger.warning(f"Error A1111: {e}. Probando siguiente proveedor.")
+
+    # -----------------------------------------------------------------------
+    # Intento 3: ComfyUI
+    # -----------------------------------------------------------------------
+    if provider in ("auto", "comfyui") and not image_b64:
+        try:
+            result = _try_comfyui(prompt, img_cfg)
+            if result:
+                image_b64 = result
+                generation_method = "comfyui"
+        except Exception as e:
+            logger.warning(f"Error ComfyUI: {e}. Probando siguiente proveedor.")
+
+    # -----------------------------------------------------------------------
+    # Intento 4: Placeholder SVG profesional (fallback universal)
     # -----------------------------------------------------------------------
     if not image_b64:
         logger.info(
-            f"Generación de imagen no disponible en este sistema (Windows/Ollama antiguo). "
-            f"Generando placeholder SVG profesional para: {prompt[:80]}"
+            f"Ningún proveedor de imagen disponible. "
+            f"Generando placeholder SVG para: {prompt[:80]}"
         )
-        svg_b64 = _generate_placeholder_svg(prompt, req.model)
-        image_b64 = svg_b64
+        image_b64 = _generate_placeholder_svg(prompt, req.model)
         generation_method = "placeholder_svg"
 
     # -----------------------------------------------------------------------
@@ -2176,6 +2313,173 @@ def list_generated_images():
         for f in sorted(img_dir.glob("*.png"), key=lambda x: x.stat().st_mtime, reverse=True)
     ]
     return {"images": images, "count": len(images)}
+
+
+@app.get("/api/image-providers/status")
+def get_image_providers_status():
+    """Retorna el estado de disponibilidad de cada proveedor de imágenes.
+    Permite al frontend mostrar qué proveedores están disponibles y cuál se usará.
+    """
+    img_cfg = _get_image_provider_config()
+    provider = img_cfg["provider"]
+
+    # Verificar Ollama
+    ollama_available = False
+    try:
+        r = requests.get(f"{OLLAMA_URL}/api/tags", timeout=3)
+        ollama_available = r.status_code == 200
+    except Exception:
+        pass
+
+    # Verificar AUTOMATIC1111
+    a1111_available = False
+    try:
+        r = requests.get(f"{img_cfg['a1111_url']}/sdapi/v1/sd-models", timeout=3)
+        a1111_available = r.status_code == 200
+    except Exception:
+        pass
+
+    # Verificar ComfyUI
+    comfyui_available = False
+    try:
+        r = requests.get(f"{img_cfg['comfyui_url']}/system_stats", timeout=3)
+        comfyui_available = r.status_code == 200
+    except Exception:
+        pass
+
+    # Determinar proveedor efectivo
+    if provider == "auto":
+        if ollama_available:
+            effective = "ollama"
+        elif a1111_available:
+            effective = "automatic1111"
+        elif comfyui_available:
+            effective = "comfyui"
+        else:
+            effective = "placeholder_svg"
+    else:
+        effective = provider
+
+    return {
+        "configured_provider": provider,
+        "effective_provider": effective,
+        "providers": {
+            "ollama": {
+                "available": ollama_available,
+                "url": OLLAMA_URL,
+                "note": "Solo disponible en macOS/Linux (limitación Ollama)",
+            },
+            "automatic1111": {
+                "available": a1111_available,
+                "url": img_cfg["a1111_url"],
+                "note": "Requiere AUTOMATIC1111 corriendo con --api flag",
+                "install_url": "https://github.com/AUTOMATIC1111/stable-diffusion-webui",
+            },
+            "comfyui": {
+                "available": comfyui_available,
+                "url": img_cfg["comfyui_url"],
+                "note": "Requiere ComfyUI corriendo",
+                "install_url": "https://github.com/comfyanonymous/ComfyUI",
+            },
+            "placeholder_svg": {
+                "available": True,
+                "url": None,
+                "note": "Siempre disponible. Genera un placeholder visual para reemplazar manualmente.",
+            },
+        },
+    }
+
+
+@app.post("/api/campaigns/{campaign_id}/publications/{pub_id}/upload-image")
+async def upload_publication_image(
+    campaign_id: str,
+    pub_id: str,
+    file: UploadFile = File(...),
+):
+    """Permite al usuario cargar una imagen manualmente desde su disco.
+
+    El archivo se guarda en el directorio de imágenes del plugin y se asocia
+    a la publicación. Soporta PNG, JPG, JPEG, GIF, WEBP y SVG.
+    Máximo 10 MB.
+    """
+    import time
+
+    # Validar tipo de archivo
+    allowed_types = {"image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/svg+xml"}
+    content_type = file.content_type or ""
+    if content_type not in allowed_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Tipo de archivo no soportado: {content_type}. Use PNG, JPG, GIF, WEBP o SVG."
+        )
+
+    # Leer contenido
+    content = await file.read()
+
+    # Validar tamaño (máx 10 MB)
+    max_size = 10 * 1024 * 1024
+    if len(content) > max_size:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Archivo demasiado grande: {len(content) // 1024} KB. Máximo 10 MB."
+        )
+
+    # Determinar extensión
+    ext_map = {
+        "image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg",
+        "image/gif": "gif", "image/webp": "webp", "image/svg+xml": "svg",
+    }
+    ext = ext_map.get(content_type, "png")
+
+    # Guardar archivo
+    img_dir = DATA_DIR / "exports" / "images"
+    img_dir.mkdir(parents=True, exist_ok=True)
+    ts = int(time.time())
+    img_filename = f"{pub_id}_{ts}.{ext}"
+    img_path = img_dir / img_filename
+    img_path.write_bytes(content)
+
+    # Guardar también como nombre fijo
+    fixed_path = img_dir / f"{pub_id}.{ext}"
+    fixed_path.write_bytes(content)
+
+    # Actualizar publicación
+    image_url = f"/api/images/{pub_id}.{ext}?t={ts}"
+    pub_updated = False
+    campaigns_root = DATA_DIR / "campaigns"
+    if campaigns_root.exists():
+        for camp_dir in campaigns_root.iterdir():
+            if not camp_dir.is_dir():
+                continue
+            if campaign_id in camp_dir.name or camp_dir.name == campaign_id:
+                plan_file = camp_dir / "plan.json"
+                if not plan_file.exists():
+                    continue
+                plan = load_json(plan_file, {"publications": []})
+                for pub in plan.get("publications", []):
+                    if pub.get("id") == pub_id:
+                        pub["generated_image_url"] = f"/api/images/{pub_id}.{ext}"
+                        pub["image_generation_method"] = "manual_upload"
+                        pub["updated_at"] = datetime.utcnow().isoformat()
+                        save_json(plan_file, plan)
+                        pub_updated = True
+                        break
+            if pub_updated:
+                break
+
+    logger.info(f"Imagen subida manualmente: {img_filename} ({len(content)} bytes) para pub {pub_id}")
+    log_audit("image_generator", "upload_image",
+              {"campaign_id": campaign_id, "pub_id": pub_id, "filename": file.filename},
+              f"Manual upload: {img_filename} ({len(content)} bytes)",
+              "manual", 0, True)
+
+    return {
+        "image_url": image_url,
+        "image_filename": img_filename,
+        "image_size_bytes": len(content),
+        "generation_method": "manual_upload",
+        "success": True,
+    }
 
 
 def _parse_llm_json(text: str) -> Optional[dict]:
