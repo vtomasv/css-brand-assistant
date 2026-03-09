@@ -162,30 +162,77 @@ def log_audit(agent_id: str, task: str, inputs: dict, output: str,
 # ---------------------------------------------------------------------------
 # Integración con Ollama
 # ---------------------------------------------------------------------------
+# Cache para recordar qué endpoint de Ollama funciona (evita reintentos en cada llamada)
+_ollama_api_endpoint: Optional[str] = None
+
+
 def call_ollama(model: str, system_prompt: str, user_message: str,
                 temperature: float = 0.7, timeout: int = 120) -> str:
-    """Llama al LLM local vía Ollama API."""
+    """Llama al LLM local vía Ollama API.
+    
+    Detecta automáticamente si Ollama soporta /api/chat (v0.1.14+) o solo
+    /api/generate (versiones antiguas, común en Windows con winget).
+    """
+    global _ollama_api_endpoint
+
     try:
-        response = requests.post(
-            f"{OLLAMA_URL}/api/chat",
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user",   "content": user_message},
-                ],
-                "options": {"temperature": temperature},
-                "stream": False,
-            },
-            timeout=timeout,
-        )
-        response.raise_for_status()
-        return response.json()["message"]["content"]
+        # --- Intento 1: /api/chat (Ollama moderno, v0.1.14+) ---
+        if _ollama_api_endpoint in (None, "chat"):
+            try:
+                response = requests.post(
+                    f"{OLLAMA_URL}/api/chat",
+                    json={
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user",   "content": user_message},
+                        ],
+                        "options": {"temperature": temperature},
+                        "stream": False,
+                    },
+                    timeout=timeout,
+                )
+                if response.status_code == 404:
+                    # /api/chat no existe → fallback a /api/generate
+                    logger.warning("Ollama: /api/chat devolvió 404, usando /api/generate como fallback")
+                    _ollama_api_endpoint = "generate"
+                else:
+                    response.raise_for_status()
+                    _ollama_api_endpoint = "chat"
+                    return response.json()["message"]["content"]
+            except requests.exceptions.HTTPError as e:
+                if "404" in str(e):
+                    logger.warning("Ollama: /api/chat no disponible, usando /api/generate")
+                    _ollama_api_endpoint = "generate"
+                else:
+                    raise
+
+        # --- Intento 2: /api/generate (Ollama antiguo, Windows winget) ---
+        if _ollama_api_endpoint == "generate":
+            # Combinar system prompt y user message en un solo prompt
+            full_prompt = f"{system_prompt}\n\nUsuario: {user_message}\n\nRespuesta:"
+            response = requests.post(
+                f"{OLLAMA_URL}/api/generate",
+                json={
+                    "model": model,
+                    "prompt": full_prompt,
+                    "options": {"temperature": temperature},
+                    "stream": False,
+                },
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            return response.json().get("response", "")
+
+        raise HTTPException(status_code=503, detail="No se pudo determinar el endpoint de Ollama")
+
     except requests.exceptions.ConnectionError:
         raise HTTPException(
             status_code=503,
             detail="Ollama no está disponible. Asegúrate de que Ollama esté corriendo.",
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al llamar a Ollama: {str(e)}")
 
@@ -1801,4 +1848,7 @@ def root():
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="info")
+    # En Windows, escuchar en 127.0.0.1 para evitar que el browser abra 0.0.0.0
+    # En Linux/macOS, escuchar en 0.0.0.0 para acceso desde red local
+    host = "127.0.0.1" if sys.platform == "win32" else "0.0.0.0"
+    uvicorn.run(app, host=host, port=PORT, log_level="info")
