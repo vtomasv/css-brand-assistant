@@ -1317,43 +1317,56 @@ async def generate_publication_image(campaign_id: str, pub_id: str, req: Generat
         if req.instruction:
             prompt = f"{prompt}. Estilo adicional: {req.instruction}"
 
-        # 3. Llamar a Ollama usando el endpoint OpenAI-compatible /v1/images/generations
-        # NOTA: /api/generate NO devuelve imágenes. El endpoint correcto es /v1/images/generations
+        # 3. Llamar a Ollama via POST /api/generate (endpoint oficial para modelos de imagen)
+        # NOTA: La documentacion oficial de Ollama indica que para modelos de imagen
+        # se usa /api/generate con stream=False. La respuesta final tiene el campo 'image'
+        # con el base64 de la imagen generada.
+        # Ref: https://github.com/ollama/ollama/blob/main/docs/api.md#image-generation-experimental
         logger.info(f"Generando imagen con modelo {req.model}, prompt: {prompt[:100]}...")
         response = requests.post(
-            f"{OLLAMA_URL}/v1/images/generations",
+            f"{OLLAMA_URL}/api/generate",
             json={
                 "model": req.model,
                 "prompt": prompt,
-                "size": "1024x1024",
-                "response_format": "b64_json",
-                "n": 1,
+                "stream": False,
+                "width": 1024,
+                "height": 1024,
             },
             timeout=300,
         )
         response.raise_for_status()
         data = response.json()
 
-        # Log de debug
-        logger.info(f"Ollama /v1/images/generations response keys: {list(data.keys())}")
-        if "data" in data:
-            logger.info(f"data array length: {len(data['data'])}")
-            if data["data"]:
-                first = data["data"][0]
-                logger.info(f"first item keys: {list(first.keys())}")
-                if "b64_json" in first:
-                    logger.info(f"b64_json length: {len(first['b64_json'])}")
+        # Log completo de la respuesta para diagnostico
+        response_keys = list(data.keys())
+        logger.info(f"Ollama /api/generate response keys: {response_keys}")
+        for key in response_keys:
+            val = data[key]
+            if isinstance(val, str) and len(val) > 100:
+                logger.info(f"  {key}: [string len={len(val)}] {val[:80]}...")
+            else:
+                logger.info(f"  {key}: {repr(val)[:200]}")
 
-        # 4. Extraer imagen base64 del campo data[0].b64_json (formato OpenAI)
+        # 4. Extraer imagen base64
+        # La respuesta final tiene el campo 'image' con el base64 (formato Ollama nativo)
+        # Tambien intentamos 'images' (array) y 'data[0].b64_json' (formato OpenAI) como fallback
         image_b64 = None
 
-        if "data" in data and data["data"]:
+        if "image" in data and data["image"]:
+            # Formato oficial Ollama: campo 'image' con base64 directo
+            image_b64 = data["image"]
+            logger.info(f"Imagen encontrada en campo 'image', longitud: {len(image_b64)}")
+        elif "images" in data and data["images"]:
+            # Formato alternativo: array 'images'
+            image_b64 = data["images"][0]
+            logger.info(f"Imagen encontrada en campo 'images[0]', longitud: {len(image_b64)}")
+        elif "data" in data and data["data"]:
+            # Formato OpenAI-compatible
             first_item = data["data"][0]
             if "b64_json" in first_item and first_item["b64_json"]:
                 image_b64 = first_item["b64_json"]
                 logger.info(f"Imagen encontrada en data[0].b64_json, longitud: {len(image_b64)}")
             elif "url" in first_item and first_item["url"]:
-                # Si devuelve URL en lugar de base64, descargarla
                 img_url = first_item["url"]
                 logger.info(f"Imagen como URL: {img_url}, descargando...")
                 img_resp = requests.get(img_url, timeout=60)
@@ -1361,34 +1374,46 @@ async def generate_publication_image(campaign_id: str, pub_id: str, req: Generat
                 import base64 as _b64
                 image_b64 = _b64.b64encode(img_resp.content).decode("utf-8")
                 logger.info(f"Imagen descargada y convertida a base64, longitud: {len(image_b64)}")
-        else:
-            logger.error(f"Respuesta inesperada de /v1/images/generations: {list(data.keys())}")
-            logger.error(f"Respuesta completa: {str(data)[:500]}")
-
-        if not image_b64:
-            # Fallback: intentar con /api/generate por si el modelo lo soporta de otra forma
-            logger.warning("Intentando fallback con /api/generate...")
-            fallback_resp = requests.post(
-                f"{OLLAMA_URL}/api/generate",
-                json={"model": req.model, "prompt": prompt, "stream": False},
-                timeout=300,
-            )
-            if fallback_resp.status_code == 200:
-                fb_data = fallback_resp.json()
-                logger.info(f"Fallback /api/generate keys: {list(fb_data.keys())}")
-                if "images" in fb_data and fb_data["images"]:
-                    image_b64 = fb_data["images"][0]
-                    logger.info(f"Imagen en fallback campo 'images', longitud: {len(image_b64)}")
-                elif "response" in fb_data and fb_data["response"]:
-                    candidate = fb_data["response"].strip()
-                    import re as _re
-                    if bool(_re.match(r'^[A-Za-z0-9+/=\s]{1000,}$', candidate)):
-                        image_b64 = candidate.replace('\n', '').replace('\r', '').replace(' ', '')
-                        logger.info(f"Imagen en fallback campo 'response', longitud: {len(image_b64)}")
-                    else:
-                        logger.warning(f"Fallback 'response' no es base64. Preview: {repr(candidate[:200])}")
+        elif "response" in data and data["response"]:
+            # Ultimo fallback: 'response' podria ser base64 en versiones antiguas
+            candidate = data["response"].strip()
+            import re as _re
+            if bool(_re.match(r'^[A-Za-z0-9+/=\s]{500,}$', candidate)):
+                image_b64 = candidate.replace('\n', '').replace('\r', '').replace(' ', '')
+                logger.info(f"Imagen en campo 'response' (base64), longitud: {len(image_b64)}")
             else:
-                logger.warning(f"Fallback /api/generate status: {fallback_resp.status_code}")
+                logger.warning(f"Campo 'response' no es base64. Preview: {repr(candidate[:200])}")
+        else:
+            logger.error(f"Ningun campo de imagen encontrado. Keys disponibles: {response_keys}")
+            logger.error(f"Respuesta completa: {str(data)[:1000]}")
+
+        # Tambien intentar con /v1/images/generations (OpenAI-compatible) si no hubo imagen
+        if not image_b64:
+            logger.warning("Intentando fallback con /v1/images/generations (OpenAI-compatible)...")
+            try:
+                fallback_resp = requests.post(
+                    f"{OLLAMA_URL}/v1/images/generations",
+                    json={
+                        "model": req.model,
+                        "prompt": prompt,
+                        "size": "1024x1024",
+                        "response_format": "b64_json",
+                        "n": 1,
+                    },
+                    timeout=300,
+                )
+                if fallback_resp.status_code == 200:
+                    fb_data = fallback_resp.json()
+                    logger.info(f"Fallback /v1/images/generations keys: {list(fb_data.keys())}")
+                    if "data" in fb_data and fb_data["data"]:
+                        first = fb_data["data"][0]
+                        if "b64_json" in first and first["b64_json"]:
+                            image_b64 = first["b64_json"]
+                            logger.info(f"Imagen en fallback OpenAI, longitud: {len(image_b64)}")
+                else:
+                    logger.warning(f"Fallback /v1/images/generations status: {fallback_resp.status_code}")
+            except Exception as fb_err:
+                logger.warning(f"Fallback /v1/images/generations error: {fb_err}")
 
         if image_b64:
             # 5. Guardar imagen en disco con timestamp para evitar caché
