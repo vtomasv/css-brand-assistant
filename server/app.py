@@ -11,6 +11,7 @@ Arquitectura:
 """
 
 import os
+import sys
 import json
 import uuid
 import shutil
@@ -19,6 +20,13 @@ import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict, Any
+
+# Forzar UTF-8 en stdout/stderr para Windows (evita UnicodeEncodeError con tildes/ñ)
+if sys.platform == "win32":
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
 import requests
 from fastapi import FastAPI, HTTPException, BackgroundTasks
@@ -97,7 +105,7 @@ async def startup_event():
             "ollama_url": OLLAMA_URL,
             "language": "es",
         }
-        config_file.write_text(json.dumps(config, indent=2, ensure_ascii=False))
+        config_file.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
 
     logger.info(f"CSS Brand Assistant iniciado. DATA_DIR={DATA_DIR}")
 
@@ -107,7 +115,8 @@ async def startup_event():
 def save_json(path: Path, data: Any) -> None:
     """Guarda datos como JSON con formato legible."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False, default=str))
+    # encoding='utf-8' es obligatorio en Windows donde el default es cp1252
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
 
 
 def load_json(path: Path, default=None) -> Any:
@@ -470,7 +479,9 @@ def _scrape_website(url: str) -> str:
         headers = {"User-Agent": "Mozilla/5.0 (compatible; CSSBrandAssistant/0.1)"}
         resp = requests.get(url, headers=headers, timeout=15)
         resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
+        # Forzar UTF-8 para evitar problemas de codificacion en Windows (cp1252)
+        resp.encoding = resp.apparent_encoding or "utf-8"
+        soup = BeautifulSoup(resp.content, "html.parser", from_encoding="utf-8")
 
         # Eliminar scripts y estilos
         for tag in soup(["script", "style", "nav", "footer", "header"]):
