@@ -1342,6 +1342,37 @@ def list_campaigns(brand_id: str):
     return {"campaigns": campaigns}
 
 
+@app.get("/api/campaigns/{campaign_id}/progress")
+def get_campaign_progress(campaign_id: str):
+    """Retorna el progreso de generación de una campaña en tiempo real.
+
+    Respuesta:
+    - status: generating | active | error | paused
+    - publications_done, publications_total, pct: progreso global
+    - channels: lista de {channel, done, total, pct} por canal
+    """
+    campaigns_dir = DATA_DIR / "campaigns"
+    for camp_dir in campaigns_dir.iterdir():
+        if camp_dir.is_dir() and campaign_id in camp_dir.name:
+            camp = load_json(camp_dir / "campaign.json", {})
+            if camp.get("id") == campaign_id:
+                progress = camp.get("generation_progress", {})
+                return {
+                    "campaign_id": campaign_id,
+                    "status": camp.get("status", "unknown"),
+                    "publications_count": camp.get("publications_count", 0),
+                    "publications_done": progress.get("publications_done", 0),
+                    "publications_total": progress.get("publications_total", 0),
+                    "pct": progress.get("pct", 0),
+                    "batch": progress.get("batch", 0),
+                    "total_batches": progress.get("total_batches", 0),
+                    "channels": progress.get("channels", []),
+                    "error": camp.get("error"),
+                    "updated_at": camp.get("updated_at"),
+                }
+    raise HTTPException(status_code=404, detail="Campaña no encontrada")
+
+
 @app.post("/api/brands/{brand_id}/campaigns", status_code=201)
 async def create_campaign(brand_id: str, campaign: CampaignCreate,
                            background_tasks: BackgroundTasks):
@@ -1491,16 +1522,40 @@ async def _generate_campaign_plan(brand_id: str, campaign_id: str,
                 f"{len(batch_slots)} publicaciones..."
             )
 
-            # Actualizar progreso en el archivo de campaña
+            # Actualizar progreso en el archivo de campaña (por canal)
             try:
                 camp_file = campaign_dir / "campaign.json"
                 camp_progress = load_json(camp_file)
                 camp_progress["status"] = "generating"
+
+                # Calcular totales por canal
+                channel_totals = {}
+                for s in slots:
+                    ch = s["channel"]
+                    channel_totals[ch] = channel_totals.get(ch, 0) + 1
+
+                # Calcular generados por canal hasta ahora
+                channel_done = {}
+                for p in all_publications:
+                    ch = p.get("channel", "")
+                    channel_done[ch] = channel_done.get(ch, 0) + 1
+
+                channel_progress = []
+                for ch, total in channel_totals.items():
+                    channel_progress.append({
+                        "channel": ch,
+                        "done": channel_done.get(ch, 0),
+                        "total": total,
+                        "pct": int(channel_done.get(ch, 0) * 100 / total) if total > 0 else 0,
+                    })
+
                 camp_progress["generation_progress"] = {
                     "batch": batch_idx + 1,
                     "total_batches": total_batches,
                     "publications_done": len(all_publications),
                     "publications_total": len(slots),
+                    "pct": int(len(all_publications) * 100 / len(slots)) if slots else 0,
+                    "channels": channel_progress,
                 }
                 camp_progress["updated_at"] = datetime.utcnow().isoformat()
                 save_json(camp_file, camp_progress)

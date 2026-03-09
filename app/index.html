@@ -1756,7 +1756,10 @@ function renderCampaigns() {
   var html = '<div class="grid-2">';
   for (var i = 0; i < state.campaigns.length; i++) {
     var c = state.campaigns[i];
-    html += '<div class="campaign-card" onclick="selectCampaign(\'' + c.id + '\')">';
+    var isGenerating = c.status === 'generating';
+
+    html += '<div class="campaign-card" data-campaign-id="' + c.id + '" onclick="selectCampaign(\'' + c.id + '\')';
+    html += '">';
     html += '<div class="campaign-header">';
     html += '<div><div class="campaign-name">' + escapeHtml(c.name) + '</div>';
     html += '<div class="campaign-meta">' + escapeHtml(c.objective) + ' &bull; ' + formatDate(c.start_date) + ' al ' + formatDate(c.end_date) + '</div></div>';
@@ -1768,9 +1771,21 @@ function renderCampaigns() {
       html += '<span class="channel-tag">' + channels[j] + '</span>';
     }
     html += '</div>';
-    if (c.publications_count > 0) {
-      html += '<div class="campaign-progress"><div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">' + c.publications_count + ' publicaciones generadas</div><div class="progress-bar"><div class="progress-fill" style="width:' + Math.min(100, c.publications_count * 5) + '%"></div></div></div>';
+
+    // Área de progreso (se actualiza en tiempo real vía _updateCampaignCardProgress)
+    html += '<div class="campaign-progress-area" style="margin-top:10px">';
+    if (isGenerating) {
+      html += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;display:flex;align-items:center;gap:6px">';
+      html += '<span class="loading-spinner" style="width:10px;height:10px"></span>';
+      html += '<span>Iniciando generación con IA...</span>';
+      html += '</div>';
+      html += '<div class="progress-bar"><div class="progress-fill" style="width:5%"></div></div>';
+    } else if (c.publications_count > 0) {
+      html += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">' + c.publications_count + ' publicaciones generadas</div>';
+      html += '<div class="progress-bar"><div class="progress-fill" style="width:100%;background:#22c55e"></div></div>';
     }
+    html += '</div>';
+
     html += '<div style="display:flex;gap:6px;margin-top:12px">';
     html += '<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();viewCampaignCalendar(\'' + c.id + '\')">Ver calendario</button>';
     html += '<button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();viewCampaignPublications(\'' + c.id + '\')">Ver publicaciones</button>';
@@ -1779,6 +1794,13 @@ function renderCampaigns() {
   }
   html += '</div>';
   content.innerHTML = html;
+
+  // Reanudar polling para campañas que aún están generando
+  for (var k = 0; k < state.campaigns.length; k++) {
+    if (state.campaigns[k].status === 'generating') {
+      _pollCampaignProgress(state.campaigns[k].id);
+    }
+  }
 }
 
 function selectCampaign(campaignId) {
@@ -1825,8 +1847,6 @@ function createCampaign() {
     return;
   }
 
-  setLoading('btnCreateCampaign', true, 'Generando con IA...');
-
   var payload = {
     brand_id: state.activeBrand.id,
     name: name,
@@ -1841,6 +1861,10 @@ function createCampaign() {
     restrictions: document.getElementById('campRestrictions').value.trim() || null,
   };
 
+  // Deshabilitar solo el botón brevemente mientras se envía la solicitud
+  var btn = document.getElementById('btnCreateCampaign');
+  if (btn) { btn.disabled = true; btn.textContent = 'Creando...'; }
+
   fetch(apiUrl('/brands/' + state.activeBrand.id + '/campaigns'), {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -1848,21 +1872,115 @@ function createCampaign() {
   })
     .then(function(r) { return r.json(); })
     .then(function(campaign) {
-      setLoading('btnCreateCampaign', false, 'Generar Campaña con IA');
+      // Rehabilitar botón y cerrar modal INMEDIATAMENTE
+      if (btn) { btn.disabled = false; btn.textContent = 'Generar Campaña con IA'; }
       closeModal('modalNewCampaign');
-      showNotification('Campaña creada. Generando publicaciones con IA...', 'success');
+      showNotification('✅ Campaña creada. Generando publicaciones en segundo plano...', 'success');
+
+      // Agregar la campaña al estado con status 'generating'
+      campaign.status = campaign.status || 'generating';
       state.campaigns.unshift(campaign);
       renderCampaigns();
-      // Polling para verificar cuando termine
-      pollCampaignStatus(campaign.id);
+
+      // Iniciar polling de progreso por canal
+      _pollCampaignProgress(campaign.id);
     })
     .catch(function(e) {
-      setLoading('btnCreateCampaign', false, 'Generar Campaña con IA');
+      if (btn) { btn.disabled = false; btn.textContent = 'Generar Campaña con IA'; }
       showNotification('Error al crear campaña: ' + e.message, 'error');
     });
 }
 
-function pollCampaignStatus(campaignId) {
+/**
+ * Polling de progreso de generación de campaña con desglose por canal.
+ * Usa el endpoint dedicado GET /api/campaigns/{id}/progress.
+ * Actualiza la tarjeta de la campaña en tiempo real sin recargar toda la lista.
+ */
+function _pollCampaignProgress(campaignId) {
+  var interval = setInterval(function() {
+    fetch(apiUrl('/campaigns/' + campaignId + '/progress'))
+      .then(function(r) { return r.json(); })
+      .then(function(prog) {
+        // Actualizar la tarjeta de la campaña en el DOM directamente
+        _updateCampaignCardProgress(campaignId, prog);
+
+        if (prog.status !== 'generating') {
+          clearInterval(interval);
+          // Recargar la lista completa de campañas para reflejar el estado final
+          fetch(apiUrl('/brands/' + state.activeBrand.id + '/campaigns'))
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+              state.campaigns = data.campaigns || [];
+              renderCampaigns();
+              if (prog.status === 'active') {
+                showNotification('✅ Campaña lista con ' + prog.publications_count + ' publicaciones generadas', 'success');
+              } else if (prog.status === 'error') {
+                showNotification('❌ Error al generar campaña: ' + (prog.error || 'error desconocido'), 'error');
+              }
+            });
+        }
+      })
+      .catch(function() { clearInterval(interval); });
+  }, 3000);
+}
+
+// Alias de compatibilidad con código anterior
+function pollCampaignStatus(campaignId) { _pollCampaignProgress(campaignId); }
+
+/**
+ * Actualiza la tarjeta de una campaña en el DOM con el progreso actual.
+ * Si la tarjeta no existe, no hace nada (se creará en el siguiente renderCampaigns).
+ */
+function _updateCampaignCardProgress(campaignId, prog) {
+  var card = document.querySelector('[data-campaign-id="' + campaignId + '"]');
+  if (!card) return;
+
+  var progressEl = card.querySelector('.campaign-progress-area');
+  if (!progressEl) return;
+
+  var channels = prog.channels || [];
+  var pct = prog.pct || 0;
+  var done = prog.publications_done || 0;
+  var total = prog.publications_total || 0;
+
+  var html = '';
+  if (prog.status === 'generating') {
+    // Barra global
+    html += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;display:flex;align-items:center;gap:6px">';
+    html += '<span class="loading-spinner" style="width:10px;height:10px"></span>';
+    html += '<span>Generando ' + done + '/' + total + ' publicaciones (' + pct + '%)</span>';
+    html += '</div>';
+    html += '<div class="progress-bar" style="margin-bottom:8px"><div class="progress-fill" style="width:' + pct + '%"></div></div>';
+
+    // Barras por canal
+    if (channels.length > 0) {
+      html += '<div style="display:flex;flex-direction:column;gap:4px">';
+      for (var i = 0; i < channels.length; i++) {
+        var ch = channels[i];
+        var chPct = ch.pct || 0;
+        var chColor = chPct === 100 ? '#22c55e' : 'var(--accent)';
+        html += '<div style="display:flex;align-items:center;gap:6px">';
+        html += '<span style="font-size:10px;color:var(--text-muted);min-width:70px">' + ch.channel + '</span>';
+        html += '<div style="flex:1;height:4px;background:var(--border);border-radius:2px;overflow:hidden">';
+        html += '<div style="height:100%;width:' + chPct + '%;background:' + chColor + ';border-radius:2px;transition:width 0.5s"></div>';
+        html += '</div>';
+        html += '<span style="font-size:10px;color:var(--text-muted);min-width:40px;text-align:right">' + ch.done + '/' + ch.total + '</span>';
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+  } else if (prog.status === 'active') {
+    html += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">' + prog.publications_count + ' publicaciones generadas</div>';
+    html += '<div class="progress-bar"><div class="progress-fill" style="width:100%;background:#22c55e"></div></div>';
+  } else if (prog.status === 'error') {
+    html += '<div style="font-size:11px;color:#ef4444">❌ Error: ' + (prog.error || 'error desconocido') + '</div>';
+  }
+
+  progressEl.innerHTML = html;
+}
+
+// Compatibilidad: pollCampaignStatus antiguo
+function _legacyPollCampaignStatus(campaignId) {
   var interval = setInterval(function() {
     fetch(apiUrl('/brands/' + state.activeBrand.id + '/campaigns'))
       .then(function(r) { return r.json(); })
@@ -2235,74 +2353,94 @@ function renderPubEditor(pub) {
   html += '<div class="form-group"><label>Prompt de imagen</label>';
   html += '<textarea id="editPubImagePrompt" style="min-height:60px">' + escapeHtml(pub.image_prompt || '') + '</textarea></div>';
 
-  // ── Sección de generación con IA ──
+  // ── Sección de generación con IA (texto e imagen separados) ──
   html += '<div style="background:var(--bg-base);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:12px">';
   html += '<div style="font-size:13px;font-weight:700;color:var(--text-main);margin-bottom:12px">🤖 Generación con IA</div>';
 
-  // ── Bloque 1: Modelo de texto (Ollama) ──
-  html += '<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:10px">';
-  html += '<div style="font-size:11px;font-weight:700;color:var(--accent);margin-bottom:6px">💬 Modelo de texto (Ollama)</div>';
-  html += '<div style="font-size:10px;color:var(--text-muted);margin-bottom:6px">Genera el texto del post usando el LLM local. Funciona en Windows, macOS y Linux.</div>';
-  html += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">';
-  html += '<select id="editTextModel" style="font-size:12px;flex:1" onchange="_onTextModelChange(this.value)">';
+  // ── PANEL TEXTO ──
+  html += '<div style="background:var(--bg-card);border:1px solid rgba(99,102,241,0.4);border-radius:10px;padding:12px;margin-bottom:12px">';
+  html += '<div style="font-size:12px;font-weight:700;color:var(--accent);margin-bottom:8px">💬 Texto del post</div>';
+  html += '<div style="font-size:10px;color:var(--text-muted);margin-bottom:8px">Genera el texto usando el LLM local (Ollama). Funciona en Windows, macOS y Linux.</div>';
+
+  // Selector de modelo de texto + estado
+  html += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">';
+  html += '<select id="editTextModel" style="font-size:12px;flex:1;min-width:160px" onchange="_onTextModelChange(this.value)">';
   html += '<option value="">Cargando modelos...</option>';
   html += '</select>';
-  html += '<span id="textModelStatus" style="font-size:10px;color:var(--text-muted)"></span>';
-  html += '</div>';
-  html += '</div>';
-
-  // ── Bloque 2: Modelo de imagen ──
-  html += '<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:10px">';
-  html += '<div style="font-size:11px;font-weight:700;color:#a855f7;margin-bottom:6px">🖼️ Modelo de imagen</div>';
-  html += '<div id="imageProviderStatus" style="font-size:10px;color:var(--text-muted);margin-bottom:6px;min-height:16px">';
-  html += '<span class="loading-spinner" style="width:8px;height:8px;margin-right:4px"></span>Verificando...</div>';
-  html += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">';
-  html += '<select id="editImageModel" style="font-size:12px;flex:1" onchange="_onImageModelChange(this.value)">';
-  html += '<option value="embedded">Motor IA Embebido (LCM Dreamshaper) — Recomendado</option>';
-  html += '<option value="x/z-image-turbo">Ollama: z-image-turbo (macOS/Linux)</option>';
-  html += '<option value="x/flux2-klein">Ollama: flux2-klein (macOS/Linux)</option>';
-  html += '</select>';
-  html += '</div>';
+  html += '<span id="textModelStatus" style="font-size:10px;color:var(--text-muted);white-space:nowrap"></span>';
   html += '</div>';
 
-  // ── Bloque 3: Opciones de generación ──
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">';
-  // Qué generar
-  html += '<div><label style="font-size:11px;color:var(--text-muted)">¿Qué generar?</label>';
-  html += '<select id="editGenTarget" style="font-size:12px">';
-  html += '<option value="text">💬 Texto del post</option>';
-  html += '<option value="image">🖼️ Imagen del post</option>';
-  html += '</select></div>';
   // Idioma
-  html += '<div><label style="font-size:11px;color:var(--text-muted)">Idioma</label>';
-  html += '<select id="editGenLanguage" style="font-size:12px">';
+  html += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">';
+  html += '<label style="font-size:11px;color:var(--text-muted);white-space:nowrap">Idioma:</label>';
+  html += '<select id="editGenLanguage" style="font-size:12px;flex:1">';
   html += '<option value="es">Español</option>';
   html += '<option value="en">English</option>';
   html += '<option value="pt">Português</option>';
-  html += '</select></div>';
+  html += '</select>';
   html += '</div>';
 
-  // Instrucción adicional
-  html += '<div style="margin-bottom:10px"><label style="font-size:11px;color:var(--text-muted)">Instrucción adicional (opcional)</label>';
-  html += '<input type="text" id="editGenInstruction" placeholder="Ej: más formal, más corto, estilo minimalista..." style="font-size:12px" /></div>';
+  // Instrucción adicional para texto
+  html += '<div style="margin-bottom:10px">';
+  html += '<label style="font-size:11px;color:var(--text-muted)">Instrucción adicional (opcional)</label>';
+  html += '<input type="text" id="editGenInstruction" placeholder="Ej: más formal, más corto, estilo minimalista..." style="font-size:12px" />';
+  html += '</div>';
 
-  // Botones de acción
-  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">';
-  html += '<button class="btn btn-accent btn-sm" id="btnGenerate" onclick="generateWithAI(\'' + pub.id + '\')" style="flex:1;min-width:140px">';
-  html += '🤖 Generar con IA</button>';
+  // Botón generar texto
+  html += '<button class="btn btn-primary btn-sm" id="btnGenerateText" onclick="generateTextWithAI(\'' + pub.id + '\')" style="width:100%">';
+  html += '💬 Generar texto del post</button>';
+  html += '</div>'; // fin panel texto
+
+  // ── PANEL IMAGEN ──
+  html += '<div style="background:var(--bg-card);border:1px solid rgba(168,85,247,0.4);border-radius:10px;padding:12px">';
+  html += '<div style="font-size:12px;font-weight:700;color:#a855f7;margin-bottom:8px">🖼️ Imagen del post</div>';
+
+  // Estado del proveedor de imagen
+  html += '<div id="imageProviderStatus" style="font-size:10px;color:var(--text-muted);margin-bottom:8px;min-height:16px">';
+  html += '<span class="loading-spinner" style="width:8px;height:8px;margin-right:4px"></span>Verificando disponibilidad...</div>';
+
+  // Selector de modelo de imagen
+  html += '<div style="margin-bottom:8px">';
+  html += '<label style="font-size:11px;color:var(--text-muted)">Modelo de imagen</label>';
+  html += '<select id="editImageModel" style="font-size:12px" onchange="_onImageModelChange(this.value)">';
+  html += '<option value="embedded">🤖 Motor IA Embebido (LCM Dreamshaper) — Windows/macOS/Linux</option>';
+  html += '<option value="x/z-image-turbo">🦎 Ollama: z-image-turbo — solo macOS/Linux</option>';
+  html += '<option value="x/flux2-klein">🦎 Ollama: flux2-klein — solo macOS/Linux</option>';
+  html += '</select>';
+  html += '</div>';
+
+  // Prompt de imagen visible y editable aquí también
+  html += '<div style="margin-bottom:10px">';
+  html += '<label style="font-size:11px;color:var(--text-muted)">Prompt de imagen (editable)</label>';
+  html += '<textarea id="editPubImagePromptInline" style="min-height:60px;font-size:12px" placeholder="Describe la imagen que quieres generar...">' + escapeHtml(pub.image_prompt || '') + '</textarea>';
+  html += '<div style="font-size:10px;color:var(--text-muted);margin-top:2px">Este prompt también se actualiza en el campo &quot;Prompt de imagen&quot; de arriba.</div>';
+  html += '</div>';
+
+  // Botones de imagen
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+  html += '<button class="btn btn-sm" id="btnGenerateImage" onclick="generateImageWithAI(\'' + pub.id + '\')" style="flex:1;background:#7c3aed;color:#fff;border:none;min-width:140px">';
+  html += '🖼️ Generar imagen con IA</button>';
   html += '<label class="btn btn-secondary btn-sm" style="cursor:pointer;margin:0;flex:1;min-width:140px;text-align:center" title="Cargar imagen desde tu computadora">';
-  html += '📂 Cargar imagen desde disco';
+  html += '📂 Cargar desde disco';
   html += '<input type="file" id="uploadImageInput" accept="image/png,image/jpeg,image/jpg,image/gif,image/webp,image/svg+xml" style="display:none" onchange="uploadImageManually(\'' + pub.id + '\', \'' + (state.activeCampaign ? state.activeCampaign.id : '') + '\')"/>';
   html += '</label>';
   html += '</div>';
 
-  html += '</div>';
+  html += '</div>'; // fin panel imagen
+  html += '</div>'; // fin sección generación
   // ── fin sección generación ──
 
   // Cargar modelos de texto y estado de imagen en background
   setTimeout(function() {
     _loadTextModels();
     _loadImageProviderStatus();
+    // Sincronizar prompt inline con el campo principal
+    var inlinePrompt = document.getElementById('editPubImagePromptInline');
+    var mainPrompt = document.getElementById('editPubImagePrompt');
+    if (inlinePrompt && mainPrompt) {
+      inlinePrompt.addEventListener('input', function() { mainPrompt.value = inlinePrompt.value; });
+      mainPrompt.addEventListener('input', function() { inlinePrompt.value = mainPrompt.value; });
+    }
   }, 100);
 
   html += '<div class="form-group"><label>Estado de publicación</label>';
@@ -2365,6 +2503,99 @@ function regeneratePub(pubId) {
   generateWithAI(pubId);
 }
 
+/**
+ * Genera solo el TEXTO del post usando Ollama.
+ * Llamado desde el botón del panel de texto.
+ */
+function generateTextWithAI(pubId) {
+  var model = (document.getElementById('editTextModel') || {}).value || '';
+  var instruction = (document.getElementById('editGenInstruction') || {}).value || '';
+  var language = (document.getElementById('editGenLanguage') || {}).value || 'es';
+
+  var btn = document.getElementById('btnGenerateText');
+  if (btn) { btn.disabled = true; btn.textContent = 'Generando texto...'; }
+
+  var payload = {
+    target: 'text',
+    instruction: instruction,
+    language: language,
+    model: model || undefined,
+  };
+
+  fetch(apiUrl('/campaigns/' + state.activeCampaign.id + '/publications/' + pubId + '/regenerate'), {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json; charset=utf-8'},
+    body: JSON.stringify(payload),
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (btn) { btn.disabled = false; btn.textContent = '💬 Generar texto del post'; }
+      if (data.text) {
+        var ta = document.getElementById('editPubText');
+        if (ta) { ta.value = data.text; updatePreview(); }
+        if (data.hashtags) {
+          var ht = document.getElementById('editPubHashtags');
+          if (ht) { ht.value = data.hashtags.join(' '); updatePreviewHashtags(); }
+        }
+        showNotification('✅ Texto generado correctamente', 'success');
+      } else {
+        showNotification('Error: ' + (data.detail || 'No se pudo generar el texto'), 'error');
+      }
+    })
+    .catch(function(e) {
+      if (btn) { btn.disabled = false; btn.textContent = '💬 Generar texto del post'; }
+      showNotification('Error al generar texto: ' + e.message, 'error');
+    });
+}
+
+/**
+ * Genera solo la IMAGEN del post usando el motor de imagen seleccionado.
+ * Llamado desde el botón del panel de imagen.
+ */
+function generateImageWithAI(pubId) {
+  var imageModel = (document.getElementById('editImageModel') || {}).value || 'embedded';
+  // Leer prompt desde el campo inline del panel de imagen
+  var promptEl = document.getElementById('editPubImagePromptInline') || document.getElementById('editPubImagePrompt');
+  var imagePrompt = promptEl ? promptEl.value.trim() : '';
+
+  var btn = document.getElementById('btnGenerateImage');
+  if (btn) { btn.disabled = true; btn.textContent = 'Generando imagen...'; }
+
+  var payload = {
+    target: 'image',
+    image_model: imageModel,
+    image_prompt: imagePrompt || undefined,
+  };
+
+  fetch(apiUrl('/campaigns/' + state.activeCampaign.id + '/publications/' + pubId + '/generate-image'), {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json; charset=utf-8'},
+    body: JSON.stringify(payload),
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (btn) { btn.disabled = false; btn.textContent = '🖼️ Generar imagen con IA'; }
+      if (data.image_url) {
+        var container = document.getElementById('pubPreviewImageContainer');
+        if (container) {
+          container.innerHTML = '<img src="' + escapeHtml(data.image_url) + '?t=' + Date.now() + '" style="width:100%;height:100%;object-fit:cover;border-radius:8px" />';
+        }
+        if (data.warning) {
+          showNotification('⚠️ ' + data.warning, 'info');
+        } else {
+          showNotification('✅ Imagen generada correctamente', 'success');
+        }
+      } else {
+        showNotification('Error: ' + (data.detail || 'No se pudo generar la imagen'), 'error');
+      }
+    })
+    .catch(function(e) {
+      if (btn) { btn.disabled = false; btn.textContent = '🖼️ Generar imagen con IA'; }
+      showNotification('Error al generar imagen: ' + e.message, 'error');
+    });
+}
+
+// generateWithAI: compatibilidad con código anterior (dispatcher)
 function generateWithAI(pubId) {
   var targetEl = document.getElementById('editGenTarget');
   var imageModelEl = document.getElementById('editImageModel');
