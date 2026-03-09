@@ -4,13 +4,13 @@
     {
       "method": "log",
       "params": {
-        "html": "<p>&#x1F504; Iniciando Ollama...</p>"
+        "html": "<p>&#x25B6;&#xFE0F; Iniciando Ollama...</p>"
       }
     },
     {
       "method": "shell.run",
       "params": {
-        "message": "{{platform === 'win32' ? 'start /B ollama serve > NUL 2>&1' : 'ollama serve > /dev/null 2>&1 &'}}",
+        "message": "{{platform === 'win32' ? 'start \"\" /B ollama serve 2>NUL' : 'ollama serve > /dev/null 2>&1 &'}}",
         "path": "{{cwd}}"
       }
     },
@@ -30,9 +30,8 @@
     {
       "method": "shell.run",
       "params": {
-        "message": "python server/app.py",
+        "message": "{{platform === 'win32' ? 'venv\\\\Scripts\\\\python.exe server/app.py' : 'venv/bin/python server/app.py'}}",
         "path": "{{cwd}}",
-        "venv": "venv",
         "env": {
           "PORT": "{{port}}",
           "DATA_DIR": "{{cwd}}/data",

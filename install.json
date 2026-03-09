@@ -3,43 +3,59 @@
     {
       "method": "log",
       "params": {
-        "html": "<h3>&#x1F680; Instalando CSS Brand Assistant...</h3><p>Plataforma detectada: {{platform}} | RAM: {{ram}}GB</p>"
+        "html": "<h3>&#x1F680; Instalando CSS Brand Assistant...</h3><p>Plataforma: <strong>{{platform}}</strong> | RAM: <strong>{{ram}}GB</strong></p>"
       }
     },
+
     {
       "method": "log",
       "params": {
-        "html": "<p>Verificando Ollama...</p>"
+        "html": "<p>&#x1F50D; Verificando Ollama...</p>"
       }
     },
     {
       "method": "shell.run",
       "params": {
-        "message": "ollama --version"
+        "message": "{{platform === 'win32' ? 'where ollama 2>NUL && echo OLLAMA_FOUND || echo OLLAMA_MISSING' : 'which ollama 2>/dev/null && echo OLLAMA_FOUND || echo OLLAMA_MISSING'}}"
       }
     },
+
     {
       "method": "log",
       "params": {
-        "html": "<p>Iniciando servicio Ollama...</p>"
+        "html": "<p>&#x2B07;&#xFE0F; Instalando Ollama (si no est&#xE1; instalado)...</p>"
       }
     },
     {
       "method": "shell.run",
       "params": {
-        "message": "{{platform === 'win32' ? 'start /B ollama serve > NUL 2>&1' : 'ollama serve > /dev/null 2>&1 &'}}"
+        "message": "{{platform === 'win32' ? 'winget install --id Ollama.Ollama -e --accept-package-agreements --accept-source-agreements 2>NUL || (curl -L https://ollama.com/download/OllamaSetup.exe -o %TEMP%\\\\OllamaSetup.exe && %TEMP%\\\\OllamaSetup.exe /S)' : platform === 'darwin' ? 'which ollama || brew install ollama 2>/dev/null || curl -fsSL https://ollama.com/install.sh | sh' : 'which ollama || curl -fsSL https://ollama.com/install.sh | sh'}}"
+      }
+    },
+
+    {
+      "method": "log",
+      "params": {
+        "html": "<p>&#x25B6;&#xFE0F; Iniciando servicio Ollama...</p>"
       }
     },
     {
       "method": "shell.run",
       "params": {
-        "message": "{{platform === 'win32' ? 'timeout /t 4 /nobreak > NUL' : 'sleep 4'}}"
+        "message": "{{platform === 'win32' ? 'start \"\" /B ollama serve 2>NUL' : 'ollama serve > /dev/null 2>&1 &'}}"
       }
     },
     {
+      "method": "shell.run",
+      "params": {
+        "message": "{{platform === 'win32' ? 'timeout /t 5 /nobreak > NUL' : 'sleep 5'}}"
+      }
+    },
+
+    {
       "method": "log",
       "params": {
-        "html": "<p>&#x2B07;&#xFE0F; Descargando modelo de IA (puede tardar varios minutos)...</p>"
+        "html": "<p>&#x2B07;&#xFE0F; Descargando modelo de IA (puede tardar varios minutos seg&#xFA;n tu conexi&#xF3;n)...</p>"
       }
     },
     {
@@ -48,10 +64,11 @@
         "message": "{{ram < 6 ? 'ollama pull llama3.2:1b' : ram < 12 ? 'ollama pull llama3.2:3b' : 'ollama pull llama3.1:8b'}}"
       }
     },
+
     {
       "method": "log",
       "params": {
-        "html": "<p>&#x1F40D; Creando entorno Python...</p>"
+        "html": "<p>&#x1F40D; Creando entorno virtual Python...</p>"
       }
     },
     {
@@ -61,20 +78,21 @@
         "path": "{{cwd}}"
       }
     },
+
     {
       "method": "log",
       "params": {
-        "html": "<p>&#x1F4E6; Instalando dependencias Python...</p>"
+        "html": "<p>&#x1F4E6; Instalando dependencias Python en el entorno virtual...</p>"
       }
     },
     {
       "method": "shell.run",
       "params": {
-        "message": "pip install --upgrade pip --quiet && pip install -r requirements.txt --quiet && echo DEPS_OK",
-        "path": "{{cwd}}",
-        "venv": "venv"
+        "message": "{{platform === 'win32' ? 'venv\\\\Scripts\\\\pip.exe install --upgrade pip --quiet && venv\\\\Scripts\\\\pip.exe install -r requirements.txt --quiet && echo DEPS_OK' : 'venv/bin/pip install --upgrade pip --quiet && venv/bin/pip install -r requirements.txt --quiet && echo DEPS_OK'}}",
+        "path": "{{cwd}}"
       }
     },
+
     {
       "method": "log",
       "params": {
@@ -84,21 +102,21 @@
     {
       "method": "shell.run",
       "params": {
-        "message": "{{platform === 'win32' ? 'mkdir data\\\\agents data\\\\prompts\\\\system data\\\\sessions data\\\\exports data\\\\brands data\\\\campaigns data\\\\audit 2>NUL || true' : 'mkdir -p data/agents data/prompts/system data/sessions data/exports data/brands data/campaigns data/audit'}}",
+        "message": "{{platform === 'win32' ? 'if not exist data\\\\agents mkdir data\\\\agents & if not exist data\\\\prompts\\\\system mkdir data\\\\prompts\\\\system & if not exist data\\\\sessions mkdir data\\\\sessions & if not exist data\\\\exports mkdir data\\\\exports & if not exist data\\\\brands mkdir data\\\\brands & if not exist data\\\\campaigns mkdir data\\\\campaigns & if not exist data\\\\audit mkdir data\\\\audit' : 'mkdir -p data/agents data/prompts/system data/sessions data/exports data/brands data/campaigns data/audit'}}",
         "path": "{{cwd}}"
       }
     },
     {
       "method": "shell.run",
       "params": {
-        "message": "{{platform === 'win32' ? 'copy defaults\\\\agents.json data\\\\agents\\\\agents.json 2>NUL || true' : 'cp defaults/agents.json data/agents/agents.json 2>/dev/null || true'}}",
+        "message": "{{platform === 'win32' ? 'if not exist data\\\\agents\\\\agents.json copy defaults\\\\agents.json data\\\\agents\\\\agents.json' : 'cp defaults/agents.json data/agents/agents.json 2>/dev/null || true'}}",
         "path": "{{cwd}}"
       }
     },
     {
       "method": "shell.run",
       "params": {
-        "message": "{{platform === 'win32' ? 'for %f in (defaults\\\\prompts\\\\*.md) do copy \"%f\" data\\\\prompts\\\\system\\ 2>NUL || true' : 'cp defaults/prompts/*.md data/prompts/system/ 2>/dev/null || true'}}",
+        "message": "{{platform === 'win32' ? 'for %f in (defaults\\\\prompts\\\\*.md) do if not exist data\\\\prompts\\\\system\\\\%~nxf copy \"%f\" data\\\\prompts\\\\system\\\\' : 'cp defaults/prompts/*.md data/prompts/system/ 2>/dev/null || true'}}",
         "path": "{{cwd}}"
       }
     },
@@ -109,6 +127,7 @@
         "text": "{{JSON.stringify({version: '0.1.0', installedAt: new Date().toISOString(), platform: platform, defaultModel: ram < 6 ? 'llama3.2:1b' : ram < 12 ? 'llama3.2:3b' : 'llama3.1:8b'}, null, 2)}}"
       }
     },
+
     {
       "method": "log",
       "params": {
