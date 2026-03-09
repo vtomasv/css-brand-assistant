@@ -74,6 +74,32 @@ COMFYUI_URL: str = os.environ.get("COMFYUI_URL", "http://localhost:8188")
 IMAGE_TIMEOUT: int = int(os.environ.get("IMAGE_TIMEOUT", 300))  # 5 min
 
 # ---------------------------------------------------------------------------
+# Motor de imagen embebido (HuggingFace Diffusers + LCM)
+# Permite generar imágenes localmente sin depender de Ollama, A1111 ni ComfyUI.
+# El motor se carga en background al primer uso o al iniciar el servidor.
+# ---------------------------------------------------------------------------
+try:
+    from image_engine import (
+        generate_image as _engine_generate,
+        load_engine_async as _engine_load_async,
+        get_engine_status as _engine_get_status,
+        is_engine_ready as _engine_is_ready,
+        unload_engine as _engine_unload,
+        list_available_models as _engine_list_models,
+        DEFAULT_DIFFUSION_MODEL,
+    )
+    IMAGE_ENGINE_AVAILABLE = True
+    logger_tmp = logging.getLogger("css-brand-assistant")
+    logger_tmp.info("Motor de imagen embebido (Diffusers) disponible")
+except ImportError as _ie:
+    IMAGE_ENGINE_AVAILABLE = False
+    DEFAULT_DIFFUSION_MODEL = "SimianLuo/LCM_Dreamshaper_v7"
+    logging.getLogger("css-brand-assistant").warning(
+        f"Motor de imagen embebido no disponible: {_ie}. "
+        "Instala: pip install torch diffusers transformers accelerate safetensors"
+    )
+
+# ---------------------------------------------------------------------------
 # Estado global de descargas de modelos en progreso
 # Clave: nombre del modelo, Valor: dict con status/progress/error
 # ---------------------------------------------------------------------------
@@ -2089,6 +2115,38 @@ async def generate_publication_image(campaign_id: str, pub_id: str, req: Generat
     provider = img_cfg["provider"]
 
     # -----------------------------------------------------------------------
+    # Intento 0: Motor embebido (HuggingFace Diffusers + LCM)
+    # Funciona en Windows, macOS y Linux sin dependencias externas.
+    # El modelo se descarga automáticamente la primera vez (~2 GB).
+    # -----------------------------------------------------------------------
+    diffusion_model = img_cfg.get("diffusion_model", DEFAULT_DIFFUSION_MODEL)
+    diffusion_steps = int(img_cfg.get("diffusion_steps", 4))
+
+    if IMAGE_ENGINE_AVAILABLE and provider in ("auto", "embedded", "diffusers") and not image_b64:
+        try:
+            logger.info(f"[ImageEngine] Intentando motor embebido con modelo {diffusion_model}")
+            engine_result = _engine_generate(
+                prompt=prompt,
+                negative_prompt="blurry, low quality, distorted, ugly, watermark, text, logo",
+                model_id=diffusion_model,
+                steps=diffusion_steps,
+                width=512,
+                height=512,
+                guidance_scale=1.0,
+            )
+            if engine_result.get("success") and engine_result.get("image_b64"):
+                image_b64 = engine_result["image_b64"]
+                generation_method = f"embedded_diffusers:{diffusion_model.split('/')[-1]}"
+                logger.info(
+                    f"[ImageEngine] Imagen generada en {engine_result.get('generation_time_s', '?')}s "
+                    f"con {diffusion_model}"
+                )
+            else:
+                logger.warning(f"[ImageEngine] Motor embebido falló: {engine_result.get('error')}. Probando siguiente.")
+        except Exception as e:
+            logger.warning(f"[ImageEngine] Error en motor embebido: {e}. Probando siguiente proveedor.")
+
+    # -----------------------------------------------------------------------
     # Intento 1: Ollama (macOS/Linux con modelo de imagen)
     # -----------------------------------------------------------------------
     if provider in ("auto", "ollama") and not image_b64:
@@ -2323,6 +2381,11 @@ def get_image_providers_status():
     img_cfg = _get_image_provider_config()
     provider = img_cfg["provider"]
 
+    # Verificar motor embebido (Diffusers)
+    engine_status = _engine_get_status() if IMAGE_ENGINE_AVAILABLE else {"state": "unavailable"}
+    embedded_available = IMAGE_ENGINE_AVAILABLE  # Disponible si las dependencias están instaladas
+    embedded_ready = IMAGE_ENGINE_AVAILABLE and engine_status.get("state") == "ready"
+
     # Verificar Ollama
     ollama_available = False
     try:
@@ -2347,9 +2410,11 @@ def get_image_providers_status():
     except Exception:
         pass
 
-    # Determinar proveedor efectivo
+    # Determinar proveedor efectivo (en orden de prioridad)
     if provider == "auto":
-        if ollama_available:
+        if embedded_available:
+            effective = "embedded_diffusers"
+        elif ollama_available:
             effective = "ollama"
         elif a1111_available:
             effective = "automatic1111"
@@ -2364,6 +2429,15 @@ def get_image_providers_status():
         "configured_provider": provider,
         "effective_provider": effective,
         "providers": {
+            "embedded_diffusers": {
+                "available": embedded_available,
+                "ready": embedded_ready,
+                "url": None,
+                "note": "Motor IA embebido (HuggingFace Diffusers + LCM). Funciona en Windows, macOS y Linux sin configuración adicional.",
+                "engine_status": engine_status,
+                "model": img_cfg.get("diffusion_model", DEFAULT_DIFFUSION_MODEL),
+                "available_models": _engine_list_models() if IMAGE_ENGINE_AVAILABLE else [],
+            },
             "ollama": {
                 "available": ollama_available,
                 "url": OLLAMA_URL,
@@ -2388,6 +2462,62 @@ def get_image_providers_status():
             },
         },
     }
+
+
+@app.get("/api/image-engine/status")
+def get_image_engine_status():
+    """Retorna el estado detallado del motor de imagen embebido."""
+    if not IMAGE_ENGINE_AVAILABLE:
+        return {
+            "available": False,
+            "state": "unavailable",
+            "message": "Motor no disponible. Instala: pip install torch diffusers transformers accelerate safetensors",
+            "models": [],
+        }
+    status = _engine_get_status()
+    return {
+        "available": True,
+        "state": status["state"],
+        "model": status.get("model"),
+        "progress": status.get("progress", 0),
+        "message": status.get("message"),
+        "error": status.get("error"),
+        "ready": status["state"] == "ready",
+        "models": _engine_list_models(),
+    }
+
+
+@app.post("/api/image-engine/load")
+def load_image_engine(body: dict = None):
+    """Inicia la carga del motor de imagen en background.
+
+    Acepta un body JSON opcional con:
+    - model_id: ID del modelo HuggingFace a cargar (default: LCM_Dreamshaper_v7)
+    """
+    if not IMAGE_ENGINE_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Motor de imagen no disponible. Instala las dependencias.")
+
+    model_id = (body or {}).get("model_id", DEFAULT_DIFFUSION_MODEL)
+    current = _engine_get_status()
+
+    if current["state"] == "loading":
+        return {"message": f"Motor ya está cargando: {current['message']}", "status": current}
+    if current["state"] == "ready" and current.get("model") == model_id:
+        return {"message": "Motor ya está listo", "status": current}
+
+    _engine_load_async(model_id)
+    return {"message": f"Carga iniciada para {model_id}", "model": model_id}
+
+
+@app.post("/api/image-engine/unload")
+def unload_image_engine():
+    """Descarga el motor de imagen de memoria RAM.
+    Útil si se necesita liberar RAM para el LLM.
+    """
+    if not IMAGE_ENGINE_AVAILABLE:
+        return {"message": "Motor no disponible"}
+    _engine_unload()
+    return {"message": "Motor descargado de memoria"}
 
 
 @app.post("/api/campaigns/{campaign_id}/publications/{pub_id}/upload-image")

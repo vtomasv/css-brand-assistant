@@ -2494,55 +2494,125 @@ function _loadImageProviderStatus() {
       var effective = data.effective_provider || 'placeholder_svg';
       var providers = data.providers || {};
       var icons = {
+        embedded_diffusers: '\uD83E\uDD16',  // 🤖
         ollama: '\uD83E\uDD99',
         automatic1111: '\uD83C\uDFA8',
         comfyui: '\u2728',
         placeholder_svg: '\uD83D\uDDBC\uFE0F'
       };
       var labels = {
+        embedded_diffusers: 'Motor IA Embebido (LCM)',
         ollama: 'Ollama (macOS/Linux)',
         automatic1111: 'AUTOMATIC1111',
         comfyui: 'ComfyUI',
         placeholder_svg: 'Placeholder SVG'
       };
       var colors = {
-        ollama: '#22c55e',
-        automatic1111: '#3b82f6',
+        embedded_diffusers: '#22c55e',
+        ollama: '#3b82f6',
+        automatic1111: '#8b5cf6',
         comfyui: '#a855f7',
         placeholder_svg: '#f59e0b'
       };
 
-      var html = '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">';
-      html += '<span style="font-weight:700;color:' + (colors[effective] || '#888') + '">';
-      html += (icons[effective] || '') + ' Proveedor activo: ' + (labels[effective] || effective) + '</span>';
+      var html = '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">';
+      html += '<span style="font-weight:700;color:' + (colors[effective] || '#888') + ';font-size:12px">';
+      html += (icons[effective] || '') + ' ' + (labels[effective] || effective) + '</span>';
 
-      // Mostrar todos los proveedores disponibles
-      var available = [];
-      for (var key in providers) {
-        if (providers[key].available && key !== effective) {
-          available.push(labels[key] || key);
+      // Estado del motor embebido
+      var embeddedInfo = providers.embedded_diffusers || {};
+      var engineState = (embeddedInfo.engine_status || {}).state || 'idle';
+      if (effective === 'embedded_diffusers') {
+        if (engineState === 'ready') {
+          html += '<span style="color:#22c55e;font-size:10px">✅ Listo</span>';
+        } else if (engineState === 'loading') {
+          var progress = (embeddedInfo.engine_status || {}).progress || 0;
+          var msg = (embeddedInfo.engine_status || {}).message || 'Cargando...';
+          html += '<span style="color:#f59e0b;font-size:10px"><span class="loading-spinner" style="width:10px;height:10px"></span> ' + progress + '% — ' + msg + '</span>';
+          // Polling para actualizar el estado
+          setTimeout(function() { _loadImageProviderStatus(); }, 3000);
+        } else if (engineState === 'idle') {
+          html += '<button onclick="_loadEmbeddedEngine()" class="btn btn-sm" style="font-size:10px;padding:2px 8px;background:#22c55e;color:white;border:none;border-radius:4px;cursor:pointer">';
+          html += '\u25B6 Cargar motor</button>';
+        } else if (engineState === 'error') {
+          html += '<span style="color:#ef4444;font-size:10px">❌ Error: ' + ((embeddedInfo.engine_status || {}).error || 'desconocido') + '</span>';
         }
-      };
-      if (available.length > 0) {
-        html += '<span style="color:var(--text-muted)"> | También disponibles: ' + available.join(', ') + '</span>';
       }
 
-      // Mostrar links de instalación si ningún proveedor de IA está disponible
-      if (effective === 'placeholder_svg') {
-        html += '</div>';
-        html += '<div style="margin-top:6px;font-size:10px;color:var(--text-muted)">';
-        html += 'Para generar imágenes con IA en Windows: ';
-        html += '<a href="https://github.com/AUTOMATIC1111/stable-diffusion-webui" target="_blank" style="color:#3b82f6">AUTOMATIC1111</a>';
-        html += ' o ';
-        html += '<a href="https://github.com/comfyanonymous/ComfyUI" target="_blank" style="color:#a855f7">ComfyUI</a>';
-        html += ' (ambos gratuitos y locales)';
+      // Mostrar modelo activo
+      if (effective === 'embedded_diffusers' && embeddedInfo.model) {
+        var modelShort = embeddedInfo.model.split('/').pop();
+        html += '<span style="color:var(--text-muted);font-size:10px">Modelo: ' + modelShort + '</span>';
       }
 
       html += '</div>';
+
+      // Segunda línea: modelos disponibles si es motor embebido
+      if (effective === 'embedded_diffusers' && embeddedInfo.available_models && embeddedInfo.available_models.length > 0) {
+        html += '<div style="margin-top:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">';
+        html += '<span style="font-size:10px;color:var(--text-muted)">Modelo:</span>';
+        html += '<select id="diffusionModelSelect" style="font-size:10px;padding:2px 4px" onchange="_changeDiffusionModel(this.value)">';
+        var models = embeddedInfo.available_models;
+        var currentModel = embeddedInfo.model || '';
+        for (var mi = 0; mi < models.length; mi++) {
+          var m = models[mi];
+          html += '<option value="' + m.id + '"' + (m.id === currentModel ? ' selected' : '') + '>';
+          html += m.name + ' (' + m.speed + ', ' + m.ram_gb + 'GB RAM)';
+          html += '</option>';
+        }
+        html += '</select>';
+        html += '</div>';
+      }
+
+      // Mostrar links de instalación si solo placeholder está disponible
+      if (effective === 'placeholder_svg') {
+        html += '<div style="margin-top:6px;font-size:10px;color:var(--text-muted)">';
+        html += '⚠️ Motor IA no disponible. Instala las dependencias: ';
+        html += '<code style="background:var(--bg-card);padding:1px 4px;border-radius:3px">pip install torch diffusers transformers accelerate</code>';
+        html += '</div>';
+      }
+
       el.innerHTML = html;
     })
     .catch(function() {
       el.innerHTML = '<span style="color:var(--text-muted)">No se pudo verificar proveedores de imagen</span>';
+    });
+}
+
+/** Inicia la carga del motor de imagen embebido en background. */
+function _loadEmbeddedEngine() {
+  var el = document.getElementById('imageProviderStatus');
+  if (el) el.innerHTML = '<span class="loading-spinner" style="width:10px;height:10px"></span> Iniciando carga del motor de imagen...';
+
+  fetch(apiUrl('/image-engine/load'), {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({})
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      showNotification('🤖 Motor de imagen iniciando... (puede tardar 2-5 min la primera vez)', 'info');
+      // Iniciar polling del estado
+      setTimeout(function() { _loadImageProviderStatus(); }, 3000);
+    })
+    .catch(function(e) {
+      showNotification('Error al iniciar motor: ' + e.message, 'error');
+    });
+}
+
+/** Cambia el modelo de difusión activo. */
+function _changeDiffusionModel(modelId) {
+  fetch(apiUrl('/config'), {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({diffusion_model: modelId})
+  })
+    .then(function(r) { return r.json(); })
+    .then(function() {
+      showNotification('Modelo cambiado a ' + modelId.split('/').pop() + '. Se cargará al generar la próxima imagen.', 'info');
+    })
+    .catch(function(e) {
+      showNotification('Error al cambiar modelo: ' + e.message, 'error');
     });
 }
 

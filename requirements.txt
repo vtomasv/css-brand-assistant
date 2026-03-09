@@ -7,3 +7,19 @@ pydantic>=2.5.0
 python-multipart>=0.0.9
 aiofiles>=23.2.0
 Pillow>=10.0.0
+
+# --- Motor de generación de imágenes embebido (HuggingFace Diffusers + LCM) ---
+# Instalación para CPU (Windows/macOS/Linux sin GPU):
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+#   pip install diffusers transformers accelerate safetensors
+#
+# Instalación para GPU NVIDIA (mucho más rápido):
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+#   pip install diffusers transformers accelerate safetensors
+#
+# Nota: torch no se incluye aquí directamente porque el índice de instalación
+# depende del hardware (CPU vs GPU). Ver instrucciones arriba.
+diffusers>=0.30.0
+transformers>=4.40.0
+accelerate>=0.30.0
+safetensors>=0.4.0
