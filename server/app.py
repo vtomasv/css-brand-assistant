@@ -1802,234 +1802,355 @@ def _ensure_model_available(model: str) -> dict:
         return {"available": False, "pulled": False, "error": str(e)}
 
 
+def _generate_placeholder_svg(prompt: str, model: str) -> str:
+    """Genera un placeholder SVG profesional codificado en base64.
+
+    Se usa como fallback cuando la generación de imágenes con Ollama no está
+    disponible (ej: Windows). El SVG incluye el prompt como referencia visual
+    para que el usuario sepa qué imagen debe colocar manualmente.
+    """
+    import base64 as _b64
+    import html as _html
+
+    # Truncar prompt para el SVG
+    prompt_short = prompt[:120] + ("..." if len(prompt) > 120 else "")
+    prompt_escaped = _html.escape(prompt_short)
+
+    # Dividir el prompt en líneas de ~50 caracteres para el SVG
+    words = prompt_escaped.split(" ")
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        if len(current) + len(word) + 1 <= 50:
+            current = (current + " " + word).strip()
+        else:
+            if current:
+                lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    lines = lines[:5]  # máximo 5 líneas
+
+    # Construir los tspan para las líneas del prompt
+    tspans = ""
+    for i, line in enumerate(lines):
+        dy = "0" if i == 0 else "1.4em"
+        tspans += f'<tspan x="512" dy="{dy}">{line}</tspan>'
+
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#16213e;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="frame" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#e94560;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0f3460;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Fondo -->
+  <rect width="1024" height="1024" fill="url(#bg)" />
+
+  <!-- Marco decorativo -->
+  <rect x="20" y="20" width="984" height="984" rx="16" ry="16"
+        fill="none" stroke="url(#frame)" stroke-width="3" opacity="0.6" />
+  <rect x="40" y="40" width="944" height="944" rx="12" ry="12"
+        fill="none" stroke="#e94560" stroke-width="1" opacity="0.3" />
+
+  <!-- Ícono de cámara / imagen -->
+  <g transform="translate(512, 340)">
+    <rect x="-80" y="-55" width="160" height="110" rx="12" ry="12"
+          fill="none" stroke="#e94560" stroke-width="3" />
+    <circle cx="0" cy="0" r="30" fill="none" stroke="#e94560" stroke-width="3" />
+    <circle cx="0" cy="0" r="12" fill="#e94560" opacity="0.5" />
+    <rect x="-15" y="-68" width="30" height="16" rx="4" ry="4"
+          fill="none" stroke="#e94560" stroke-width="2" />
+    <rect x="50" y="-52" width="18" height="12" rx="3" ry="3"
+          fill="#e94560" opacity="0.4" />
+  </g>
+
+  <!-- Título -->
+  <text x="512" y="480"
+        font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="bold"
+        fill="#e94560" text-anchor="middle" letter-spacing="3">
+    IMAGEN PENDIENTE
+  </text>
+
+  <!-- Separador -->
+  <line x1="200" y1="500" x2="824" y2="500" stroke="#e94560" stroke-width="1" opacity="0.4" />
+
+  <!-- Prompt -->
+  <text x="512" y="535"
+        font-family="Arial, Helvetica, sans-serif" font-size="16"
+        fill="#a0aec0" text-anchor="middle" dominant-baseline="hanging">
+    {tspans}
+  </text>
+
+  <!-- Nota inferior -->
+  <text x="512" y="920"
+        font-family="Arial, Helvetica, sans-serif" font-size="13"
+        fill="#4a5568" text-anchor="middle">
+    Generación de imágenes no disponible en Windows · Reemplazar manualmente
+  </text>
+
+  <!-- Modelo -->
+  <text x="512" y="945"
+        font-family="Arial, Helvetica, sans-serif" font-size="11"
+        fill="#2d3748" text-anchor="middle">
+    Modelo solicitado: {_html.escape(model)}
+  </text>
+</svg>"""
+
+    return _b64.b64encode(svg.encode("utf-8")).decode("utf-8")
+
+
 @app.post("/api/campaigns/{campaign_id}/publications/{pub_id}/generate-image")
 async def generate_publication_image(campaign_id: str, pub_id: str, req: GenerateImageRequest):
     """Genera una imagen para la publicación usando Ollama con modelo de imagen.
-    Si el modelo no está disponible, lo descarga automáticamente antes de generar.
+
+    Estrategia de generación (en orden de prioridad):
+    1. /api/generate con modelo de imagen (Ollama >= 0.5.4, macOS/Linux)
+    2. /v1/images/generations (OpenAI-compatible, si está disponible)
+    3. Placeholder SVG profesional (fallback universal, funciona en Windows)
+
+    En Windows, la generación de imágenes con Ollama no está soportada todavía
+    (limitación upstream de Ollama). El placeholder SVG permite continuar el flujo
+    de trabajo y se puede reemplazar manualmente desde la UI.
     """
     import time, base64
     start = time.time()
 
+    # Construir prompt completo
+    prompt = req.image_prompt
+    if req.instruction:
+        prompt = f"{prompt}. Estilo adicional: {req.instruction}"
+
+    logger.info(f"Generando imagen con modelo {req.model}, prompt: {prompt[:100]}...")
+
+    image_b64: Optional[str] = None
+    generation_method: str = "none"
+
+    # -----------------------------------------------------------------------
+    # Intento 1: /api/generate (Ollama nativo, macOS/Linux con modelo imagen)
+    # -----------------------------------------------------------------------
     try:
-        # 1. Verificar y descargar el modelo si es necesario
         model_status = _ensure_model_available(req.model)
-        if not model_status["available"]:
-            return {
-                "error": f"No se pudo preparar el modelo {req.model}: {model_status['error']}",
-                "success": False,
-            }
-        if model_status["pulled"]:
-            logger.info(f"Modelo {req.model} descargado exitosamente antes de generar")
+        if model_status["available"]:
+            if model_status.get("pulled"):
+                logger.info(f"Modelo {req.model} descargado exitosamente antes de generar")
 
-        # 2. Construir prompt
-        prompt = req.image_prompt
-        if req.instruction:
-            prompt = f"{prompt}. Estilo adicional: {req.instruction}"
+            response = requests.post(
+                f"{OLLAMA_URL}/api/generate",
+                json={
+                    "model": req.model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "width": 1024,
+                    "height": 1024,
+                },
+                timeout=300,
+            )
 
-        # 3. Llamar a Ollama via POST /api/generate (endpoint oficial para modelos de imagen)
-        # NOTA: La documentacion oficial de Ollama indica que para modelos de imagen
-        # se usa /api/generate con stream=False. La respuesta final tiene el campo 'image'
-        # con el base64 de la imagen generada.
-        # Ref: https://github.com/ollama/ollama/blob/main/docs/api.md#image-generation-experimental
-        logger.info(f"Generando imagen con modelo {req.model}, prompt: {prompt[:100]}...")
-        response = requests.post(
-            f"{OLLAMA_URL}/api/generate",
-            json={
-                "model": req.model,
-                "prompt": prompt,
-                "stream": False,
-                "width": 1024,
-                "height": 1024,
-            },
-            timeout=300,
-        )
-        response.raise_for_status()
-        data = response.json()
+            if response.status_code == 200:
+                data = response.json()
+                response_keys = list(data.keys())
+                logger.info(f"Ollama /api/generate response keys: {response_keys}")
 
-        # Log completo de la respuesta para diagnostico
-        response_keys = list(data.keys())
-        logger.info(f"Ollama /api/generate response keys: {response_keys}")
-        for key in response_keys:
-            val = data[key]
-            if isinstance(val, str) and len(val) > 100:
-                logger.info(f"  {key}: [string len={len(val)}] {val[:80]}...")
+                if "image" in data and data["image"]:
+                    image_b64 = data["image"]
+                    generation_method = "ollama_api_generate"
+                    logger.info(f"Imagen en campo 'image', longitud: {len(image_b64)}")
+                elif "images" in data and data["images"]:
+                    image_b64 = data["images"][0]
+                    generation_method = "ollama_api_generate"
+                    logger.info(f"Imagen en campo 'images[0]', longitud: {len(image_b64)}")
+                elif "response" in data and data["response"]:
+                    import re as _re
+                    candidate = data["response"].strip().replace('\n', '').replace(' ', '')
+                    if bool(_re.match(r'^[A-Za-z0-9+/=]{500,}$', candidate)):
+                        image_b64 = candidate
+                        generation_method = "ollama_api_generate_response"
+                        logger.info(f"Imagen en campo 'response' (base64), longitud: {len(image_b64)}")
+                    else:
+                        logger.warning(f"Campo 'response' no es base64. Preview: {repr(data['response'][:200])}")
             else:
-                logger.info(f"  {key}: {repr(val)[:200]}")
-
-        # 4. Extraer imagen base64
-        # La respuesta final tiene el campo 'image' con el base64 (formato Ollama nativo)
-        # Tambien intentamos 'images' (array) y 'data[0].b64_json' (formato OpenAI) como fallback
-        image_b64 = None
-
-        if "image" in data and data["image"]:
-            # Formato oficial Ollama: campo 'image' con base64 directo
-            image_b64 = data["image"]
-            logger.info(f"Imagen encontrada en campo 'image', longitud: {len(image_b64)}")
-        elif "images" in data and data["images"]:
-            # Formato alternativo: array 'images'
-            image_b64 = data["images"][0]
-            logger.info(f"Imagen encontrada en campo 'images[0]', longitud: {len(image_b64)}")
-        elif "data" in data and data["data"]:
-            # Formato OpenAI-compatible
-            first_item = data["data"][0]
-            if "b64_json" in first_item and first_item["b64_json"]:
-                image_b64 = first_item["b64_json"]
-                logger.info(f"Imagen encontrada en data[0].b64_json, longitud: {len(image_b64)}")
-            elif "url" in first_item and first_item["url"]:
-                img_url = first_item["url"]
-                logger.info(f"Imagen como URL: {img_url}, descargando...")
-                img_resp = requests.get(img_url, timeout=60)
-                img_resp.raise_for_status()
-                import base64 as _b64
-                image_b64 = _b64.b64encode(img_resp.content).decode("utf-8")
-                logger.info(f"Imagen descargada y convertida a base64, longitud: {len(image_b64)}")
-        elif "response" in data and data["response"]:
-            # Ultimo fallback: 'response' podria ser base64 en versiones antiguas
-            candidate = data["response"].strip()
-            import re as _re
-            if bool(_re.match(r'^[A-Za-z0-9+/=\s]{500,}$', candidate)):
-                image_b64 = candidate.replace('\n', '').replace('\r', '').replace(' ', '')
-                logger.info(f"Imagen en campo 'response' (base64), longitud: {len(image_b64)}")
-            else:
-                logger.warning(f"Campo 'response' no es base64. Preview: {repr(candidate[:200])}")
-        else:
-            logger.error(f"Ningun campo de imagen encontrado. Keys disponibles: {response_keys}")
-            logger.error(f"Respuesta completa: {str(data)[:1000]}")
-
-        # Tambien intentar con /v1/images/generations (OpenAI-compatible) si no hubo imagen
-        if not image_b64:
-            logger.warning("Intentando fallback con /v1/images/generations (OpenAI-compatible)...")
-            try:
-                fallback_resp = requests.post(
-                    f"{OLLAMA_URL}/v1/images/generations",
-                    json={
-                        "model": req.model,
-                        "prompt": prompt,
-                        "size": "1024x1024",
-                        "response_format": "b64_json",
-                        "n": 1,
-                    },
-                    timeout=300,
+                logger.warning(
+                    f"Ollama /api/generate retornó {response.status_code} para modelo de imagen. "
+                    f"Esto es esperado en Windows (generación de imágenes no soportada). "
+                    f"Activando fallback."
                 )
-                if fallback_resp.status_code == 200:
-                    fb_data = fallback_resp.json()
-                    logger.info(f"Fallback /v1/images/generations keys: {list(fb_data.keys())}")
-                    if "data" in fb_data and fb_data["data"]:
-                        first = fb_data["data"][0]
-                        if "b64_json" in first and first["b64_json"]:
-                            image_b64 = first["b64_json"]
-                            logger.info(f"Imagen en fallback OpenAI, longitud: {len(image_b64)}")
-                else:
-                    logger.warning(f"Fallback /v1/images/generations status: {fallback_resp.status_code}")
-            except Exception as fb_err:
-                logger.warning(f"Fallback /v1/images/generations error: {fb_err}")
-
-        if image_b64:
-            # 5. Guardar imagen en disco con timestamp para evitar caché
-            img_dir = DATA_DIR / "exports" / "images"
-            img_dir.mkdir(parents=True, exist_ok=True)
-            ts = int(time.time())
-            img_filename = f"{pub_id}_{ts}.png"
-            img_path = img_dir / img_filename
-
-            try:
-                img_bytes = base64.b64decode(image_b64, validate=False)
-                img_path.write_bytes(img_bytes)
-                logger.info(f"Imagen guardada: {img_path} ({len(img_bytes)} bytes)")
-            except Exception as decode_err:
-                logger.error(f"Error decodificando base64: {decode_err}")
-                return {"error": f"Error decodificando imagen: {str(decode_err)}", "success": False}
-
-            # También guardar como nombre fijo (para referencia persistente)
-            fixed_path = img_dir / f"{pub_id}.png"
-            fixed_path.write_bytes(img_bytes)
-
-            # 6. Actualizar publicación con URL de imagen
-            image_url = f"/api/images/{pub_id}.png?t={ts}"
-            pub_updated = False
-
-            # Buscar el plan.json de la campaña por directorio exacto o por búsqueda
-            # El directorio se llama {brand_id}_{campaign_id}
-            campaigns_root = DATA_DIR / "campaigns"
-            if campaigns_root.exists():
-                # Primero intentar ruta directa (más eficiente)
-                for camp_dir in campaigns_root.iterdir():
-                    if not camp_dir.is_dir():
-                        continue
-                    # El nombre puede ser brand_id_campaign_id o solo campaign_id
-                    dir_name = camp_dir.name
-                    if campaign_id in dir_name or dir_name == campaign_id:
-                        plan_file = camp_dir / "plan.json"
-                        if not plan_file.exists():
-                            logger.warning(f"plan.json no encontrado en {camp_dir}")
-                            continue
-                        plan = load_json(plan_file, {"publications": []})
-                        for pub in plan.get("publications", []):
-                            if pub.get("id") == pub_id:
-                                pub["generated_image_url"] = f"/api/images/{pub_id}.png"
-                                pub["updated_at"] = datetime.utcnow().isoformat()
-                                save_json(plan_file, plan)
-                                pub_updated = True
-                                logger.info(f"Publicación {pub_id} actualizada con imagen en {plan_file}")
-                                break
-                    if pub_updated:
-                        break
-
-            if not pub_updated:
-                logger.warning(f"No se encontró la publicación {pub_id} en campaña {campaign_id} para actualizar imagen")
-
-            latency = int((time.time() - start) * 1000)
-            log_audit("image_generator", "generate_image",
-                      {"campaign_id": campaign_id, "pub_id": pub_id, "model": req.model},
-                      f"Image generated: {img_filename} ({len(img_bytes)} bytes)", req.model, latency, True)
-
-            # Devolver base64 directamente para que el frontend pueda mostrar la imagen
-            # sin depender del endpoint de archivos (evita problemas de URL relativa/absoluta)
-            return {
-                "image_url": image_url,
-                "image_filename": img_filename,
-                "image_size_bytes": len(img_bytes),
-                "image_b64": image_b64,  # base64 directo para mostrar como data:image/png;base64,...
-                "success": True,
-            }
         else:
-            # El modelo respondió pero sin imagen — devolver debug info completo
-            debug_info = {
-                "response_keys": list(data.keys()),
-                "data_count": len(data.get("data", [])),
-                "data_preview": str(data.get("data", []))[:300] if data.get("data") else None,
-                "error_detail": data.get("error", {}) if isinstance(data.get("error"), dict) else data.get("error"),
-            }
-            logger.error(f"Modelo {req.model} no retornó imagen. Debug: {debug_info}")
-            return {
-                "error": (
-                    f"El modelo {req.model} no retornó una imagen válida. "
-                    "Verifica que Ollama esté en versión >= 0.5.4 y que el modelo sea compatible con generación de imágenes. "
-                    "Nota: la generación de imágenes solo está disponible en macOS actualmente."
-                ),
-                "debug": debug_info,
-                "success": False,
-            }
+            logger.warning(f"Modelo {req.model} no disponible: {model_status.get('error')}. Activando fallback.")
 
     except requests.exceptions.ConnectionError:
-        return {"error": "Ollama no está disponible", "success": False}
+        logger.warning("Ollama no disponible para generación de imagen. Activando fallback.")
     except Exception as e:
-        logger.error(f"Error generando imagen: {e}")
+        logger.warning(f"Error en /api/generate para imagen: {e}. Activando fallback.")
+
+    # -----------------------------------------------------------------------
+    # Intento 2: /v1/images/generations (OpenAI-compatible)
+    # -----------------------------------------------------------------------
+    if not image_b64:
+        try:
+            fallback_resp = requests.post(
+                f"{OLLAMA_URL}/v1/images/generations",
+                json={
+                    "model": req.model,
+                    "prompt": prompt,
+                    "size": "1024x1024",
+                    "response_format": "b64_json",
+                    "n": 1,
+                },
+                timeout=300,
+            )
+            if fallback_resp.status_code == 200:
+                fb_data = fallback_resp.json()
+                if "data" in fb_data and fb_data["data"]:
+                    first = fb_data["data"][0]
+                    if "b64_json" in first and first["b64_json"]:
+                        image_b64 = first["b64_json"]
+                        generation_method = "openai_compat"
+                        logger.info(f"Imagen en fallback OpenAI-compat, longitud: {len(image_b64)}")
+                    elif "url" in first and first["url"]:
+                        img_resp = requests.get(first["url"], timeout=60)
+                        img_resp.raise_for_status()
+                        image_b64 = base64.b64encode(img_resp.content).decode("utf-8")
+                        generation_method = "openai_compat_url"
+                        logger.info(f"Imagen descargada desde URL OpenAI-compat, longitud: {len(image_b64)}")
+            else:
+                logger.warning(f"Fallback /v1/images/generations status: {fallback_resp.status_code}")
+        except Exception as fb_err:
+            logger.warning(f"Fallback /v1/images/generations error: {fb_err}")
+
+    # -----------------------------------------------------------------------
+    # Intento 3: Placeholder SVG profesional (fallback universal para Windows)
+    # -----------------------------------------------------------------------
+    if not image_b64:
+        logger.info(
+            f"Generación de imagen no disponible en este sistema (Windows/Ollama antiguo). "
+            f"Generando placeholder SVG profesional para: {prompt[:80]}"
+        )
+        svg_b64 = _generate_placeholder_svg(prompt, req.model)
+        image_b64 = svg_b64
+        generation_method = "placeholder_svg"
+
+    # -----------------------------------------------------------------------
+    # Guardar imagen / SVG en disco y actualizar publicación
+    # -----------------------------------------------------------------------
+    try:
+        img_dir = DATA_DIR / "exports" / "images"
+        img_dir.mkdir(parents=True, exist_ok=True)
+        ts = int(time.time())
+
+        # Determinar extensión según el método
+        ext = "svg" if generation_method == "placeholder_svg" else "png"
+        img_filename = f"{pub_id}_{ts}.{ext}"
+        img_path = img_dir / img_filename
+
+        if generation_method == "placeholder_svg":
+            # El SVG ya es texto, no base64
+            svg_content = base64.b64decode(image_b64).decode("utf-8")
+            img_path.write_text(svg_content, encoding="utf-8")
+            # Guardar también como .png (alias) para compatibilidad
+            fixed_path = img_dir / f"{pub_id}.svg"
+            fixed_path.write_text(svg_content, encoding="utf-8")
+            img_bytes_len = len(svg_content.encode("utf-8"))
+        else:
+            img_bytes = base64.b64decode(image_b64, validate=False)
+            img_path.write_bytes(img_bytes)
+            fixed_path = img_dir / f"{pub_id}.png"
+            fixed_path.write_bytes(img_bytes)
+            img_bytes_len = len(img_bytes)
+
+        logger.info(f"Imagen guardada: {img_path} ({img_bytes_len} bytes), método: {generation_method}")
+
+        # Actualizar publicación con URL de imagen
+        image_url = f"/api/images/{pub_id}.{ext}?t={ts}"
+        pub_updated = False
+        campaigns_root = DATA_DIR / "campaigns"
+        if campaigns_root.exists():
+            for camp_dir in campaigns_root.iterdir():
+                if not camp_dir.is_dir():
+                    continue
+                if campaign_id in camp_dir.name or camp_dir.name == campaign_id:
+                    plan_file = camp_dir / "plan.json"
+                    if not plan_file.exists():
+                        continue
+                    plan = load_json(plan_file, {"publications": []})
+                    for pub in plan.get("publications", []):
+                        if pub.get("id") == pub_id:
+                            pub["generated_image_url"] = f"/api/images/{pub_id}.{ext}"
+                            pub["image_generation_method"] = generation_method
+                            pub["updated_at"] = datetime.utcnow().isoformat()
+                            save_json(plan_file, plan)
+                            pub_updated = True
+                            break
+                if pub_updated:
+                    break
+
+        if not pub_updated:
+            logger.warning(f"No se encontró la publicación {pub_id} para actualizar imagen")
+
+        latency = int((time.time() - start) * 1000)
+        log_audit("image_generator", "generate_image",
+                  {"campaign_id": campaign_id, "pub_id": pub_id, "model": req.model},
+                  f"Image {generation_method}: {img_filename} ({img_bytes_len} bytes)",
+                  req.model, latency, True)
+
+        result = {
+            "image_url": image_url,
+            "image_filename": img_filename,
+            "image_size_bytes": img_bytes_len,
+            "image_b64": image_b64,
+            "generation_method": generation_method,
+            "success": True,
+        }
+
+        # Agregar aviso si es placeholder
+        if generation_method == "placeholder_svg":
+            result["warning"] = (
+                "La generación de imágenes con IA no está disponible en Windows todavía "
+                "(limitación de Ollama). Se generó un placeholder visual con el prompt. "
+                "Podes reemplazarla manualmente desde la UI o usar la función de regenerar."
+            )
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error guardando imagen: {e}")
         return {"error": str(e), "success": False}
 
 
 @app.get("/api/images/{filename}")
 def serve_generated_image(filename: str):
-    """Sirve imágenes generadas por IA con headers anti-caché."""
+    """Sirve imágenes generadas por IA con headers anti-caché.
+    Soporta .png (imagen real) y .svg (placeholder cuando Ollama no soporta imágenes).
+    """
     # Soportar filename con query string (ej: pub_id.png?t=123)
     clean_filename = filename.split("?")[0]
-    img_path = DATA_DIR / "exports" / "images" / clean_filename
+    img_dir = DATA_DIR / "exports" / "images"
+
+    # Buscar el archivo exacto primero
+    img_path = img_dir / clean_filename
     if not img_path.exists():
-        logger.warning(f"Imagen no encontrada: {img_path}")
-        raise HTTPException(status_code=404, detail=f"Imagen no encontrada: {clean_filename}")
+        # Si pidieron .png pero solo existe .svg (placeholder), servir el SVG
+        if clean_filename.endswith(".png"):
+            svg_path = img_dir / clean_filename.replace(".png", ".svg")
+            if svg_path.exists():
+                img_path = svg_path
+                clean_filename = svg_path.name
+            else:
+                logger.warning(f"Imagen no encontrada: {img_path}")
+                raise HTTPException(status_code=404, detail=f"Imagen no encontrada: {clean_filename}")
+        else:
+            logger.warning(f"Imagen no encontrada: {img_path}")
+            raise HTTPException(status_code=404, detail=f"Imagen no encontrada: {clean_filename}")
+
+    media_type = "image/svg+xml" if clean_filename.endswith(".svg") else "image/png"
     return FileResponse(
         str(img_path),
-        media_type="image/png",
+        media_type=media_type,
         headers={
             "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma": "no-cache",
